@@ -1,5 +1,7 @@
 package com.example.ui.home
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -37,8 +40,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Flight
+import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.ShoppingCart
+import androidx.compose.material.icons.rounded.Style
+import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
@@ -80,11 +90,14 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Note
+import com.example.ui.components.BrandGradientButton
 import com.example.ui.components.EmptyState
 import com.example.ui.components.NeuCard
 import com.example.ui.components.NeuIconButton
@@ -113,10 +126,12 @@ fun HomeScreen(
 
     val selectionMode = selectedIds.isNotEmpty()
     val retentionDays by viewModel.trashRetentionDays.collectAsStateWithLifecycle()
+    val customTemplates by viewModel.customTemplates.collectAsStateWithLifecycle()
     var fabExpanded by remember { mutableStateOf(false) }
     var actionNote by remember { mutableStateOf<Note?>(null) }
     var showCoffeeSheet by remember { mutableStateOf(false) }
     var showRetentionSheet by remember { mutableStateOf(false) }
+    var showTemplateCreator by remember { mutableStateOf(false) }
 
     val insets = WindowInsets.systemBars.asPaddingValues()
     val visibleIds = remember(state.pinned, state.notes) {
@@ -276,6 +291,11 @@ fun HomeScreen(
                     fabExpanded = false
                     onCreateNote(template)
                 },
+                customTemplates = customTemplates,
+                onCreateTemplate = {
+                    fabExpanded = false
+                    showTemplateCreator = true
+                },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 20.dp, bottom = insets.calculateBottomPadding() + 24.dp),
@@ -326,6 +346,17 @@ fun HomeScreen(
                 showRetentionSheet = false
             },
             onDismiss = { showRetentionSheet = false },
+        )
+    }
+
+    if (showTemplateCreator) {
+        TemplateCreatorSheet(
+            templates = customTemplates,
+            onCreate = { name, iconKey, content ->
+                viewModel.addCustomTemplate(name, iconKey, content)
+            },
+            onDelete = { viewModel.deleteCustomTemplate(it) },
+            onDismiss = { showTemplateCreator = false },
         )
     }
 }
@@ -781,6 +812,8 @@ private fun ExpandableFab(
     expanded: Boolean,
     onToggle: () -> Unit,
     onAction: (template: String?) -> Unit,
+    customTemplates: List<CustomTemplate>,
+    onCreateTemplate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val neu = LocalNeuColors.current
@@ -796,8 +829,14 @@ private fun ExpandableFab(
             exit = fadeOut() + slideOutVertically { it / 2 } + scaleOut(targetScale = 0.8f),
         ) {
             Column(horizontalAlignment = Alignment.End) {
-                FabAction("Meeting", Icons.Rounded.Groups) { onAction("meeting") }
+                FabAction("New template", Icons.Rounded.Style) { onCreateTemplate() }
                 Spacer(Modifier.height(12.dp))
+                customTemplates.forEach { template ->
+                    FabAction(template.name, templateIcon(template.iconKey)) {
+                        onAction("custom:${template.id}")
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
                 FabAction("Checklist", Icons.Rounded.Checklist) { onAction("checklist") }
                 Spacer(Modifier.height(12.dp))
                 FabAction("New note", Icons.Rounded.EditNote) { onAction(null) }
@@ -958,6 +997,7 @@ private fun SheetAction(
 @Composable
 private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState()
+    val context = LocalContext.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -977,22 +1017,45 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "If MyNotes+ makes your day a little calmer, you can support its development. These options are on their way.",
+                text = "If MyNotes+ makes your day a little calmer, you can support its development.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(20.dp))
-            CoffeeOption(Icons.Rounded.CurrencyRupee, "UPI", "Pay via any UPI app")
+            CoffeeOption(
+                icon = Icons.Rounded.CurrencyRupee,
+                name = "UPI",
+                subtitle = "Pay via any UPI app",
+                comingSoon = false,
+                onClick = {
+                    val uri = Uri.parse("upi://pay").buildUpon()
+                        .appendQueryParameter("pa", "gpay-12199931519@okbizaxis")
+                        .appendQueryParameter("pn", "MyNotes+")
+                        .appendQueryParameter("cu", "INR")
+                        .build()
+                    runCatching {
+                        context.startActivity(
+                            Intent.createChooser(Intent(Intent.ACTION_VIEW, uri), "Pay via UPI"),
+                        )
+                    }
+                },
+            )
             Spacer(Modifier.height(12.dp))
             CoffeeOption(Icons.Rounded.LocalCafe, "Ko-fi", "Support on ko-fi.com")
             Spacer(Modifier.height(12.dp))
-            CoffeeOption(Icons.Rounded.Shop, "Google Play", "Tip through the Play Store")
+            CoffeeOption(Icons.Rounded.Shop, "Playto", "Support on Playto")
         }
     }
 }
 
 @Composable
-private fun CoffeeOption(icon: ImageVector, name: String, subtitle: String) {
+private fun CoffeeOption(
+    icon: ImageVector,
+    name: String,
+    subtitle: String,
+    comingSoon: Boolean = true,
+    onClick: (() -> Unit)? = null,
+) {
     val neu = LocalNeuColors.current
     Box(
         modifier = Modifier
@@ -1000,11 +1063,15 @@ private fun CoffeeOption(icon: ImageVector, name: String, subtitle: String) {
             .neumorphicRaised(18.dp, neu, elevation = 6.dp)
             .clip(RoundedCornerShape(18.dp))
             .background(MaterialTheme.colorScheme.surface)
+            .then(
+                if (!comingSoon && onClick != null) Modifier.clickable(onClick = onClick)
+                else Modifier
+            )
             .padding(16.dp),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.blur(6.dp),
+            modifier = if (comingSoon) Modifier.blur(6.dp) else Modifier,
         ) {
             Box(
                 modifier = Modifier
@@ -1031,15 +1098,19 @@ private fun CoffeeOption(icon: ImageVector, name: String, subtitle: String) {
             }
         }
         Text(
-            text = "Coming soon",
+            text = if (comingSoon) "Coming soon" else "Pay",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            color = if (comingSoon) MaterialTheme.colorScheme.onSecondaryContainer
+            else MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .clip(RoundedCornerShape(50))
-                .background(MaterialTheme.colorScheme.secondaryContainer)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
+                .background(
+                    if (comingSoon) MaterialTheme.colorScheme.secondaryContainer
+                    else MaterialTheme.colorScheme.primary
+                )
+                .padding(horizontal = 12.dp, vertical = 5.dp),
         )
     }
 }
@@ -1104,6 +1175,210 @@ private fun RetentionPickerSheet(
                 }
             }
         }
+    }
+}
+
+private val templateIconOptions: List<Pair<String, ImageVector>> = listOf(
+    "note" to Icons.Rounded.EditNote,
+    "checklist" to Icons.Rounded.Checklist,
+    "meeting" to Icons.Rounded.Groups,
+    "work" to Icons.Rounded.Work,
+    "idea" to Icons.Rounded.Lightbulb,
+    "book" to Icons.Rounded.MenuBook,
+    "travel" to Icons.Rounded.Flight,
+    "shopping" to Icons.Rounded.ShoppingCart,
+)
+
+private fun templateIcon(key: String): ImageVector =
+    templateIconOptions.firstOrNull { it.first == key }?.second ?: Icons.Rounded.EditNote
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TemplateCreatorSheet(
+    templates: List<CustomTemplate>,
+    onCreate: (name: String, iconKey: String, content: String) -> Unit,
+    onDelete: (id: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    var name by remember { mutableStateOf("") }
+    var content by remember { mutableStateOf("") }
+    var iconKey by remember { mutableStateOf("note") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "New template",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Create a reusable draft — it'll show up in the + menu.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(18.dp))
+            TemplateLabel("Name")
+            TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
+
+            Spacer(Modifier.height(16.dp))
+            TemplateLabel("Icon")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                templateIconOptions.forEach { (key, icon) ->
+                    IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            TemplateLabel("Template text")
+            TemplateTextField(content, { content = it }, "Type your template…", minHeight = 120.dp)
+
+            Spacer(Modifier.height(20.dp))
+            BrandGradientButton(
+                text = "Save template",
+                onClick = {
+                    if (name.isNotBlank()) {
+                        onCreate(name.trim(), iconKey, content)
+                        name = ""
+                        content = ""
+                        iconKey = "note"
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            if (templates.isNotEmpty()) {
+                Spacer(Modifier.height(24.dp))
+                TemplateLabel("Your templates")
+                templates.forEach { template ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = templateIcon(template.iconKey),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                        Spacer(Modifier.width(14.dp))
+                        Text(
+                            text = template.name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .clickable { onDelete(template.id) },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Delete,
+                                contentDescription = "Delete template",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TemplateLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+}
+
+@Composable
+private fun TemplateTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    singleLine: Boolean = false,
+    minHeight: androidx.compose.ui.unit.Dp = 0.dp,
+) {
+    val neu = LocalNeuColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neumorphicRaised(16.dp, neu, elevation = 5.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .heightIn(min = minHeight)
+            .padding(14.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(
+                text = placeholder,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = singleLine,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun IconChoice(icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+    val neu = LocalNeuColors.current
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .neumorphicRaised(24.dp, neu, elevation = if (selected) 7.dp else 4.dp)
+            .clip(CircleShape)
+            .then(
+                if (selected) Modifier.background(brandGradientHorizontal())
+                else Modifier.background(MaterialTheme.colorScheme.surface)
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
 

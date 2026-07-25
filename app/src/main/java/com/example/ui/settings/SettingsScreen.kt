@@ -200,16 +200,10 @@ fun SettingsScreen(
                 SettingsDivider()
                 SettingsLinkRow(
                     icon = Icons.Rounded.Info,
-                    title = "Application information",
+                    title = "Application Information",
                     subtitle = "Version, licenses & credits",
                     trailingLabel = "Soon",
                     onClick = { },
-                )
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    text = "MyNotes+ keeps your thoughts private by design. Offline-first, encrypted at rest, yours alone.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

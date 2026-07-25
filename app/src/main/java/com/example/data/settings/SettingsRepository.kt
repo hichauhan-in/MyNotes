@@ -8,9 +8,12 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.domain.model.CustomTemplate
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 
 private val Context.settingsDataStore: DataStore<Preferences> by
     preferencesDataStore(name = "mynotes_settings")
@@ -45,6 +48,11 @@ class SettingsRepository(context: Context) {
         val HIDE_RECENTS = booleanPreferencesKey("hide_from_recents")
         val TRASH_RETENTION = intPreferencesKey("trash_retention_days")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_complete")
+        val TEMPLATES = stringPreferencesKey("custom_templates")
+    }
+
+    val customTemplates: Flow<List<CustomTemplate>> = dataStore.data.map { prefs ->
+        parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
     }
 
     val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
@@ -85,6 +93,43 @@ class SettingsRepository(context: Context) {
 
     suspend fun setOnboardingComplete(value: Boolean) =
         edit { it[Keys.ONBOARDING_DONE] = value }
+
+    suspend fun addTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(current + template)
+    }
+
+    suspend fun deleteTemplate(id: String) = dataStore.edit { prefs ->
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(current.filterNot { it.id == id })
+    }
+
+    private fun parseTemplates(json: String): List<CustomTemplate> = runCatching {
+        val arr = JSONArray(json)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            CustomTemplate(
+                id = o.optString("id"),
+                name = o.optString("name"),
+                iconKey = o.optString("icon", "note"),
+                content = o.optString("content"),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun serializeTemplates(items: List<CustomTemplate>): String {
+        val arr = JSONArray()
+        items.forEach {
+            arr.put(
+                JSONObject()
+                    .put("id", it.id)
+                    .put("name", it.name)
+                    .put("icon", it.iconKey)
+                    .put("content", it.content),
+            )
+        }
+        return arr.toString()
+    }
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         dataStore.edit(block)

@@ -11,6 +11,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.di.AppContainer
+import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Note
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,6 +61,17 @@ class HomeViewModel : ViewModel() {
 
     fun setTrashRetention(days: Int) = viewModelScope.launch {
         settings.setTrashRetentionDays(days)
+    }
+
+    val customTemplates: StateFlow<List<CustomTemplate>> = settings.customTemplates
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addCustomTemplate(name: String, iconKey: String, content: String) = viewModelScope.launch {
+        settings.addTemplate(CustomTemplate(name = name, iconKey = iconKey, content = content))
+    }
+
+    fun deleteCustomTemplate(id: String) = viewModelScope.launch {
+        settings.deleteTemplate(id)
     }
 
     private val _query = MutableStateFlow("")

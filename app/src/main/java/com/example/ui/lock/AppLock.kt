@@ -24,6 +24,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -50,6 +51,9 @@ private val ALLOWED_AUTHENTICATORS =
 /**
  * Gates [content] behind a biometric / device-credential prompt when [enabled].
  *
+ * - Enabling the lock mid-session (e.g. toggling it in Settings) does NOT lock the
+ *   current session — it takes effect from the next launch / return, so the user
+ *   stays exactly where they were.
  * - Locks again whenever the app is genuinely backgrounded (ignores rotation).
  * - Re-prompts automatically every time the app returns to the foreground.
  * - The manual "Unlock" button works reliably even after the user cancels, because a
@@ -60,19 +64,19 @@ private val ALLOWED_AUTHENTICATORS =
  */
 @Composable
 fun AppLockGate(enabled: Boolean, content: @Composable () -> Unit) {
-    if (!enabled) {
-        content()
-        return
-    }
     val activity = LocalContext.current.findFragmentActivity()
     if (activity == null) {
         content()
         return
     }
 
-    var unlocked by rememberSaveable { mutableStateOf(false) }
+    // Whether the lock was already ON when this gate first appeared. If the user turns
+    // it on later, this stays false, so the current session is never interrupted.
+    val lockedAtStart = rememberSaveable { enabled }
+    var unlocked by rememberSaveable { mutableStateOf(!lockedAtStart) }
     var error by remember { mutableStateOf<String?>(null) }
     val promptShowing = remember { mutableStateOf(false) }
+    val currentEnabled by rememberUpdatedState(enabled)
 
     // A single reused prompt for the whole session.
     val biometricPrompt = remember(activity) {
@@ -134,10 +138,10 @@ fun AppLockGate(enabled: Boolean, content: @Composable () -> Unit) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_STOP ->
-                    if (!activity.isChangingConfigurations) unlocked = false
+                    if (currentEnabled && !activity.isChangingConfigurations) unlocked = false
 
                 Lifecycle.Event.ON_RESUME ->
-                    if (!unlocked) authenticate()
+                    if (currentEnabled && !unlocked) authenticate()
 
                 else -> Unit
             }
@@ -146,7 +150,7 @@ fun AppLockGate(enabled: Boolean, content: @Composable () -> Unit) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    if (unlocked) {
+    if (!enabled || unlocked) {
         content()
     } else {
         LockScreen(error = error, onUnlock = { authenticate() })

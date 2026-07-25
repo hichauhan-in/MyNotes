@@ -239,8 +239,8 @@ fun EditorScreen(
                 onChecklist = { editContent { prefixLine(it, "- [ ] ") } },
                 onBullet = { editContent { prefixLine(it, "- ") } },
                 onNumbered = { editContent { prefixLine(it, "1. ") } },
-                onQuote = { editContent { prefixLine(it, "> ") } },
-                onCode = { editContent { wrapSelection(it, "`") } },
+                onQuote = { editContent { surround(it, "\"", "\"") } },
+                onCode = { editContent { surround(it, "[", "]") } },
                 onDivider = { editContent { insert(it, "\n\n---\n\n") } },
             )
         }
@@ -393,8 +393,8 @@ private fun FormattingToolbar(
         ToolbarButton(Icons.Rounded.Checklist, "Checklist", onChecklist)
         ToolbarButton(Icons.AutoMirrored.Rounded.FormatListBulleted, "Bullet list", onBullet)
         ToolbarButton(Icons.Rounded.FormatListNumbered, "Numbered list", onNumbered)
-        ToolbarButton(Icons.Rounded.FormatQuote, "Quote", onQuote)
-        ToolbarButton(Icons.Rounded.Code, "Code", onCode)
+        ToolbarButton(Icons.Rounded.FormatQuote, "Quotes", onQuote)
+        ToolbarButton(Icons.Rounded.Code, "Brackets", onCode)
         ToolbarButton(Icons.Rounded.HorizontalRule, "Divider", onDivider)
     }
 }
@@ -664,6 +664,16 @@ private fun wrapSelection(value: TextFieldValue, token: String): TextFieldValue 
     val selected = text.substring(start, end)
     val newText = text.substring(0, start) + token + selected + token + text.substring(end)
     val cursor = start + token.length + selected.length + token.length
+    return TextFieldValue(newText, TextRange(cursor))
+}
+
+private fun surround(value: TextFieldValue, open: String, close: String): TextFieldValue {
+    val start = value.selection.min
+    val end = value.selection.max
+    val text = value.text
+    val selected = text.substring(start, end)
+    val newText = text.substring(0, start) + open + selected + close + text.substring(end)
+    val cursor = start + open.length + selected.length + close.length
     return TextFieldValue(newText, TextRange(cursor))
 }
 

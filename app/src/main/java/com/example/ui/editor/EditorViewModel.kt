@@ -10,6 +10,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.UUID
 import kotlin.math.max
@@ -47,6 +48,7 @@ data class EditorUiState(
 
 class EditorViewModel : ViewModel() {
     private val repository = AppContainer.noteRepository!!
+    private val settings = AppContainer.settingsRepository!!
     private val appScope = AppContainer.applicationScope
 
     private val _state = MutableStateFlow(EditorUiState())
@@ -63,7 +65,19 @@ class EditorViewModel : ViewModel() {
         if (loaded) return
         loaded = true
         if (id.isNullOrBlank()) {
-            _state.value = seedFor(template)
+            if (template != null && template.startsWith("custom:")) {
+                val templateId = template.removePrefix("custom:")
+                viewModelScope.launch {
+                    val t = settings.customTemplates.first().find { it.id == templateId }
+                    _state.value = if (t != null) {
+                        EditorUiState(title = t.name, content = t.content)
+                    } else {
+                        EditorUiState()
+                    }
+                }
+            } else {
+                _state.value = seedFor(template)
+            }
             return
         }
         viewModelScope.launch {
