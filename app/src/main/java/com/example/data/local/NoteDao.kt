@@ -37,6 +37,9 @@ interface NoteDao {
 
     @Query("DELETE FROM notes WHERE isTrashed = 1")
     suspend fun emptyTrash()
+
+    @Query("DELETE FROM notes WHERE isTrashed = 1 AND updatedAt < :cutoff")
+    suspend fun purgeTrashedBefore(cutoff: Long)
 }
 
 @Dao

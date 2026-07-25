@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -51,6 +52,15 @@ data class HomeUiState(
 
 class HomeViewModel : ViewModel() {
     private val repository = AppContainer.noteRepository!!
+    private val settings = AppContainer.settingsRepository!!
+
+    val trashRetentionDays: StateFlow<Int> = settings.settings
+        .map { it.trashRetentionDays }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 30)
+
+    fun setTrashRetention(days: Int) = viewModelScope.launch {
+        settings.setTrashRetentionDays(days)
+    }
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()

@@ -43,6 +43,8 @@ import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.CurrencyRupee
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.EditNote
@@ -50,12 +52,14 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.LocalCafe
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Shop
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -70,6 +74,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -107,8 +112,11 @@ fun HomeScreen(
     val selectedIds by viewModel.selectedIds.collectAsStateWithLifecycle()
 
     val selectionMode = selectedIds.isNotEmpty()
+    val retentionDays by viewModel.trashRetentionDays.collectAsStateWithLifecycle()
     var fabExpanded by remember { mutableStateOf(false) }
     var actionNote by remember { mutableStateOf<Note?>(null) }
+    var showCoffeeSheet by remember { mutableStateOf(false) }
+    var showRetentionSheet by remember { mutableStateOf(false) }
 
     val insets = WindowInsets.systemBars.asPaddingValues()
     val visibleIds = remember(state.pinned, state.notes) {
@@ -149,6 +157,7 @@ fun HomeScreen(
                 } else {
                     HomeHeader(
                         noteCount = state.totalNotes,
+                        onCoffee = { showCoffeeSheet = true },
                         onOpenSettings = onOpenSettings,
                     )
                 }
@@ -176,7 +185,11 @@ fun HomeScreen(
             if (selectedFilter == NoteFilter.TRASH && !state.isEmpty) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
-                        TrashBanner(onEmptyTrash = viewModel::emptyTrash)
+                        TrashBanner(
+                            retentionDays = retentionDays,
+                            onChangeRetention = { showRetentionSheet = true },
+                            onEmptyTrash = viewModel::emptyTrash,
+                        )
                         Spacer(Modifier.height(16.dp))
                     }
                 }
@@ -300,11 +313,27 @@ fun HomeScreen(
             viewModel = viewModel,
         )
     }
+
+    if (showCoffeeSheet) {
+        BuyCoffeeSheet(onDismiss = { showCoffeeSheet = false })
+    }
+
+    if (showRetentionSheet) {
+        RetentionPickerSheet(
+            current = retentionDays,
+            onSelect = {
+                viewModel.setTrashRetention(it)
+                showRetentionSheet = false
+            },
+            onDismiss = { showRetentionSheet = false },
+        )
+    }
 }
 
 @Composable
 private fun HomeHeader(
     noteCount: Int,
+    onCoffee: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     Row(
@@ -336,6 +365,12 @@ private fun HomeHeader(
                 )
             }
         }
+        NeuIconButton(
+            icon = Icons.Rounded.Coffee,
+            contentDescription = "Buy me a coffee",
+            onClick = onCoffee,
+        )
+        Spacer(Modifier.width(10.dp))
         NeuIconButton(
             icon = Icons.Rounded.Settings,
             contentDescription = "Settings",
@@ -543,38 +578,62 @@ private fun FilterChipsRow(
 }
 
 @Composable
-private fun TrashBanner(onEmptyTrash: () -> Unit) {
-    Row(
+private fun TrashBanner(
+    retentionDays: Int,
+    onChangeRetention: () -> Unit,
+    onEmptyTrash: () -> Unit,
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(14.dp),
     ) {
-        Icon(
-            imageVector = Icons.Rounded.Delete,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.error,
-            modifier = Modifier.size(20.dp),
-        )
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text = "Items in Trash are deleted permanently",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onErrorContainer,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = "Empty",
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .clickable(onClick = onEmptyTrash)
-                .padding(horizontal = 10.dp, vertical = 4.dp),
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Rounded.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Auto-delete after",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = if (retentionDays <= 0) "Never" else "$retentionDays days",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClick = onChangeRetention)
+                    .padding(horizontal = 12.dp, vertical = 5.dp),
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Deleted notes are removed permanently.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = "Empty now",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClick = onEmptyTrash)
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
     }
 }
 
@@ -635,6 +694,24 @@ private fun NoteCard(
                         Spacer(Modifier.height(10.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             note.tags.take(2).forEach { tag -> TagPill(text = "#$tag") }
+                        }
+                    }
+
+                    if (note.isChecklist && note.checklistTotal > 0) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Rounded.Checklist,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "${note.checklistDone}/${note.checklistTotal} done",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
                         }
                     }
 
@@ -874,6 +951,159 @@ private fun SheetAction(
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(16.dp))
         Text(label, style = MaterialTheme.typography.bodyLarge, color = tint)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Buy me a coffee ☕",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "If MyNotes+ makes your day a little calmer, you can support its development. These options are on their way.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(20.dp))
+            CoffeeOption(Icons.Rounded.CurrencyRupee, "UPI", "Pay via any UPI app")
+            Spacer(Modifier.height(12.dp))
+            CoffeeOption(Icons.Rounded.LocalCafe, "Ko-fi", "Support on ko-fi.com")
+            Spacer(Modifier.height(12.dp))
+            CoffeeOption(Icons.Rounded.Shop, "Google Play", "Tip through the Play Store")
+        }
+    }
+}
+
+@Composable
+private fun CoffeeOption(icon: ImageVector, name: String, subtitle: String) {
+    val neu = LocalNeuColors.current
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neumorphicRaised(18.dp, neu, elevation = 6.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(16.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.blur(6.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(brandGradientHorizontal()),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+            }
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            text = "Coming soon",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.secondaryContainer)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RetentionPickerSheet(
+    current: Int,
+    onSelect: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val options = listOf(7, 14, 30, 60, 90, 0)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Keep deleted notes for",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Notes in Trash are permanently deleted after this period.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(14.dp))
+            options.forEach { days ->
+                val selected = days == current
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onSelect(days) }
+                        .padding(vertical = 14.dp, horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (days <= 0) "Never (keep forever)" else "$days days",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (selected) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = "Selected",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

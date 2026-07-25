@@ -21,7 +21,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +51,10 @@ private val ALLOWED_AUTHENTICATORS =
  * Gates [content] behind a biometric / device-credential prompt when [enabled].
  *
  * - Locks again whenever the app is genuinely backgrounded (ignores rotation).
+ * - Re-prompts automatically every time the app returns to the foreground.
+ * - The manual "Unlock" button works reliably even after the user cancels, because a
+ *   single [BiometricPrompt] instance is reused (creating a new one per attempt races
+ *   with the library's internal fragment and is the usual cause of a dead button).
  * - Fails *open* if the device has no biometric or screen lock enrolled, so the
  *   user is never locked out of their own encrypted notes.
  */
@@ -68,49 +71,85 @@ fun AppLockGate(enabled: Boolean, content: @Composable () -> Unit) {
     }
 
     var unlocked by rememberSaveable { mutableStateOf(false) }
-    var authInProgress by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val promptShowing = remember { mutableStateOf(false) }
 
+    // A single reused prompt for the whole session.
+    val biometricPrompt = remember(activity) {
+        BiometricPrompt(
+            activity,
+            ContextCompat.getMainExecutor(activity),
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    promptShowing.value = false
+                    error = null
+                    unlocked = true
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                    promptShowing.value = false
+                    error = when (errorCode) {
+                        BiometricPrompt.ERROR_USER_CANCELED,
+                        BiometricPrompt.ERROR_NEGATIVE_BUTTON,
+                        BiometricPrompt.ERROR_CANCELED,
+                        -> null
+
+                        else -> errString.toString()
+                    }
+                }
+
+                override fun onAuthenticationFailed() {
+                    // Single mismatch (e.g. wrong finger) — keep the prompt open.
+                }
+            },
+        )
+    }
+
+    val promptInfo = remember {
+        BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Unlock MyNotes+")
+            .setSubtitle("Confirm your identity to continue")
+            .setAllowedAuthenticators(ALLOWED_AUTHENTICATORS)
+            .build()
+    }
+
+    fun authenticate() {
+        if (unlocked || promptShowing.value) return
+        if (!canAuthenticate(activity)) {
+            unlocked = true
+            return
+        }
+        error = null
+        promptShowing.value = true
+        try {
+            biometricPrompt.authenticate(promptInfo)
+        } catch (e: Exception) {
+            promptShowing.value = false
+            error = e.message ?: "Authentication unavailable"
+        }
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, activity) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && !activity.isChangingConfigurations) {
-                unlocked = false
+            when (event) {
+                Lifecycle.Event.ON_STOP ->
+                    if (!activity.isChangingConfigurations) unlocked = false
+
+                Lifecycle.Event.ON_RESUME ->
+                    if (!unlocked) authenticate()
+
+                else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    fun prompt() {
-        if (authInProgress) return
-        if (!canAuthenticate(activity)) {
-            unlocked = true
-            return
-        }
-        authInProgress = true
-        error = null
-        promptBiometric(
-            activity = activity,
-            onSuccess = {
-                authInProgress = false
-                unlocked = true
-            },
-            onError = { message ->
-                authInProgress = false
-                error = message
-            },
-        )
-    }
-
-    LaunchedEffect(unlocked) {
-        if (!unlocked) prompt()
-    }
-
     if (unlocked) {
         content()
     } else {
-        LockScreen(error = error, onUnlock = { prompt() })
+        LockScreen(error = error, onUnlock = { authenticate() })
     }
 }
 
@@ -170,33 +209,6 @@ private fun LockScreen(error: String?, onUnlock: () -> Unit) {
 private fun canAuthenticate(context: Context): Boolean =
     BiometricManager.from(context).canAuthenticate(ALLOWED_AUTHENTICATORS) ==
         BiometricManager.BIOMETRIC_SUCCESS
-
-private fun promptBiometric(
-    activity: FragmentActivity,
-    onSuccess: () -> Unit,
-    onError: (String) -> Unit,
-) {
-    val executor = ContextCompat.getMainExecutor(activity)
-    val callback = object : BiometricPrompt.AuthenticationCallback() {
-        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-            onSuccess()
-        }
-
-        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-            onError(errString.toString())
-        }
-    }
-    val info = BiometricPrompt.PromptInfo.Builder()
-        .setTitle("Unlock MyNotes+")
-        .setSubtitle("Confirm your identity to continue")
-        .setAllowedAuthenticators(ALLOWED_AUTHENTICATORS)
-        .build()
-    try {
-        BiometricPrompt(activity, executor, callback).authenticate(info)
-    } catch (e: Exception) {
-        onError(e.message ?: "Authentication unavailable")
-    }
-}
 
 private tailrec fun Context.findFragmentActivity(): FragmentActivity? = when (this) {
     is FragmentActivity -> this

@@ -31,7 +31,9 @@ object AppContainer {
                 AppDatabase::class.java,
                 "vault_notes_db"
             )
-                // Schema evolves during development; wipe & rebuild rather than crash.
+                // Preserve notes across the v2 -> v3 schema change where possible.
+                .addMigrations(AppDatabase.MIGRATION_2_3)
+                // Any other unknown schema jump: wipe & rebuild rather than crash.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
             noteRepository = NoteRepository(database!!.noteDao())

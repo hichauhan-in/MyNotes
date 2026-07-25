@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.di.AppContainer
 import com.example.domain.model.Note
+import com.example.domain.model.NoteType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -20,6 +21,7 @@ data class EditorUiState(
     val id: String = UUID.randomUUID().toString(),
     val title: String = "",
     val content: String = "",
+    val type: NoteType = NoteType.TEXT,
     val isPinned: Boolean = false,
     val isFavorite: Boolean = false,
     val colorArgb: Int = 0,
@@ -54,12 +56,14 @@ class EditorViewModel : ViewModel() {
     private var autoSaveJob: Job? = null
     private var loaded = false
 
+    /** True only once the user has actually changed something in this session. */
+    private var dirty = false
+
     fun load(id: String?, template: String?) {
         if (loaded) return
         loaded = true
         if (id.isNullOrBlank()) {
-            val (title, content) = seedFor(template)
-            _state.value = EditorUiState(title = title, content = content)
+            _state.value = seedFor(template)
             return
         }
         viewModelScope.launch {
@@ -70,6 +74,7 @@ class EditorViewModel : ViewModel() {
                     id = note.id,
                     title = note.title,
                     content = note.content,
+                    type = note.type,
                     isPinned = note.isPinned,
                     isFavorite = note.isFavorite,
                     colorArgb = note.colorArgb,
@@ -82,26 +87,31 @@ class EditorViewModel : ViewModel() {
     }
 
     fun onTitleChanged(value: String) {
+        dirty = true
         _state.value = _state.value.copy(title = value, saveStatus = SaveStatus.Editing)
         scheduleAutoSave()
     }
 
     fun onContentChanged(value: String) {
+        dirty = true
         _state.value = _state.value.copy(content = value, saveStatus = SaveStatus.Editing)
         scheduleAutoSave()
     }
 
     fun togglePin() {
+        dirty = true
         _state.value = _state.value.copy(isPinned = !_state.value.isPinned)
         persistNow()
     }
 
     fun toggleFavorite() {
+        dirty = true
         _state.value = _state.value.copy(isFavorite = !_state.value.isFavorite)
         persistNow()
     }
 
     fun setColor(colorArgb: Int) {
+        dirty = true
         _state.value = _state.value.copy(colorArgb = colorArgb)
         persistNow()
     }
@@ -121,8 +131,12 @@ class EditorViewModel : ViewModel() {
     }
 
     private fun persistNow() {
+        // Never save a note the user hasn't actually touched (e.g. opening a template
+        // and backing out, or opening an existing note and leaving unchanged).
+        if (!dirty) return
         val snapshot = _state.value
         if (!snapshot.hasContent && !persisted) return
+        dirty = false
         appScope.launch {
             _state.value = _state.value.copy(saveStatus = SaveStatus.Saving)
             repository.saveNote(
@@ -130,6 +144,7 @@ class EditorViewModel : ViewModel() {
                     id = snapshot.id,
                     title = snapshot.title,
                     content = snapshot.content,
+                    type = snapshot.type,
                     createdAt = snapshot.createdAt,
                     updatedAt = System.currentTimeMillis(),
                     isPinned = snapshot.isPinned,
@@ -151,16 +166,25 @@ class EditorViewModel : ViewModel() {
         onDone()
     }
 
-    private fun seedFor(template: String?): Pair<String, String> = when (template) {
-        "checklist" -> "Checklist" to "- [ ] First task\n- [ ] Second task\n- [ ] Third task"
-        "meeting" -> "Meeting notes" to buildString {
-            append("Attendees:\n\n")
-            append("Agenda:\n\n")
-            append("Discussion:\n\n")
-            append("Action items:\n- [ ] \n\n")
-            append("Decisions:\n\n")
-            append("Next meeting:")
-        }
-        else -> "" to ""
+    private fun seedFor(template: String?): EditorUiState = when (template) {
+        "checklist" -> EditorUiState(
+            title = "Checklist",
+            type = NoteType.CHECKLIST,
+            content = "[ ] \n[ ] \n[ ] ",
+        )
+
+        "meeting" -> EditorUiState(
+            title = "Meeting notes",
+            content = buildString {
+                append("Attendees:\n\n")
+                append("Agenda:\n\n")
+                append("Discussion:\n\n")
+                append("Action items:\n- [ ] \n\n")
+                append("Decisions:\n\n")
+                append("Next meeting:")
+            },
+        )
+
+        else -> EditorUiState()
     }
 }

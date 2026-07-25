@@ -23,6 +23,9 @@ data class AppSettings(
     val cloudSyncEnabled: Boolean = false,
     val appLockEnabled: Boolean = false,
     val hideFromRecents: Boolean = false,
+    /** How many days deleted notes stay in Trash before auto-deletion. 0 == keep forever. */
+    val trashRetentionDays: Int = 30,
+    val onboardingComplete: Boolean = false,
 )
 
 /**
@@ -40,6 +43,8 @@ class SettingsRepository(context: Context) {
         val CLOUD = booleanPreferencesKey("cloud_sync_enabled")
         val LOCK = booleanPreferencesKey("app_lock_enabled")
         val HIDE_RECENTS = booleanPreferencesKey("hide_from_recents")
+        val TRASH_RETENTION = intPreferencesKey("trash_retention_days")
+        val ONBOARDING_DONE = booleanPreferencesKey("onboarding_complete")
     }
 
     val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
@@ -52,6 +57,8 @@ class SettingsRepository(context: Context) {
             cloudSyncEnabled = prefs[Keys.CLOUD] ?: false,
             appLockEnabled = prefs[Keys.LOCK] ?: false,
             hideFromRecents = prefs[Keys.HIDE_RECENTS] ?: false,
+            trashRetentionDays = prefs[Keys.TRASH_RETENTION] ?: 30,
+            onboardingComplete = prefs[Keys.ONBOARDING_DONE] ?: false,
         )
     }
 
@@ -72,6 +79,12 @@ class SettingsRepository(context: Context) {
 
     suspend fun setHideFromRecents(value: Boolean) =
         edit { it[Keys.HIDE_RECENTS] = value }
+
+    suspend fun setTrashRetentionDays(days: Int) =
+        edit { it[Keys.TRASH_RETENTION] = days }
+
+    suspend fun setOnboardingComplete(value: Boolean) =
+        edit { it[Keys.ONBOARDING_DONE] = value }
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         dataStore.edit(block)

@@ -15,8 +15,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.di.AppContainer
 import com.example.ui.lock.AppLockGate
 import com.example.ui.navigation.MyNotesNavigation
+import com.example.ui.onboarding.OnboardingScreen
 import com.example.ui.theme.MyNotesTheme
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 class MainActivity : FragmentActivity() {
@@ -50,8 +52,18 @@ class MainActivity : FragmentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    AppLockGate(enabled = settings.appLockEnabled) {
-                        MyNotesNavigation()
+                    if (!settings.onboardingComplete) {
+                        OnboardingScreen(
+                            onFinish = {
+                                AppContainer.applicationScope.launch {
+                                    settingsRepository.setOnboardingComplete(true)
+                                }
+                            },
+                        )
+                    } else {
+                        AppLockGate(enabled = settings.appLockEnabled) {
+                            MyNotesNavigation()
+                        }
                     }
                 }
             }

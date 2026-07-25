@@ -3,6 +3,7 @@ package com.example.ui.editor
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -29,8 +30,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -52,9 +55,12 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,12 +72,17 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.domain.model.Checklist as ChecklistUtil
+import com.example.domain.model.ChecklistItem
+import com.example.domain.model.NoteType
 import com.example.ui.components.NeuIconButton
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.NoteAccents
 import com.example.ui.theme.neumorphicRaised
+import java.util.UUID
 
 @Composable
 fun EditorScreen(
@@ -86,11 +97,27 @@ fun EditorScreen(
     var titleField by remember { mutableStateOf(TextFieldValue()) }
     var contentField by remember { mutableStateOf(TextFieldValue()) }
     var showColorSheet by remember { mutableStateOf(false) }
+    val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
 
     // Seed the editable fields once the note has been loaded / created.
     LaunchedEffect(state.id) {
         titleField = TextFieldValue(state.title, TextRange(state.title.length))
         contentField = TextFieldValue(state.content, TextRange(state.content.length))
+        if (state.type == NoteType.CHECKLIST) {
+            checklistItems.clear()
+            ChecklistUtil.parse(state.content).forEach {
+                checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), it.text, it.checked))
+            }
+            if (checklistItems.isEmpty()) {
+                checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
+            }
+        }
+    }
+
+    fun pushChecklist() {
+        viewModel.onContentChanged(
+            ChecklistUtil.serialize(checklistItems.map { ChecklistItem(it.text, it.checked) })
+        )
     }
 
     val focusManager = LocalFocusManager.current
@@ -160,50 +187,63 @@ fun EditorScreen(
             )
 
             Spacer(Modifier.height(10.dp))
-            EditorMeta(
-                words = state.wordCount,
-                readingMinutes = state.readingMinutes,
-            )
-            Spacer(Modifier.height(16.dp))
-
-            BasicTextField(
-                value = contentField,
-                onValueChange = {
-                    contentField = it
-                    viewModel.onContentChanged(it.text)
-                },
-                textStyle = MaterialTheme.typography.bodyLarge.copy(
-                    color = MaterialTheme.colorScheme.onBackground,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                decorationBox = { inner ->
-                    if (contentField.text.isEmpty()) {
-                        Text(
-                            text = "Start writing your thoughts…",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        )
-                    }
-                    inner()
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 320.dp),
-            )
+            if (state.type == NoteType.CHECKLIST) {
+                ChecklistProgress(
+                    done = checklistItems.count { it.checked && it.text.isNotBlank() },
+                    total = checklistItems.count { it.text.isNotBlank() },
+                )
+                Spacer(Modifier.height(16.dp))
+                ChecklistBody(
+                    items = checklistItems,
+                    onChanged = { pushChecklist() },
+                )
+            } else {
+                EditorMeta(
+                    words = state.wordCount,
+                    readingMinutes = state.readingMinutes,
+                )
+                Spacer(Modifier.height(16.dp))
+                BasicTextField(
+                    value = contentField,
+                    onValueChange = {
+                        contentField = it
+                        viewModel.onContentChanged(it.text)
+                    },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(
+                        color = MaterialTheme.colorScheme.onBackground,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    decorationBox = { inner ->
+                        if (contentField.text.isEmpty()) {
+                            Text(
+                                text = "Start writing your thoughts…",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            )
+                        }
+                        inner()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 320.dp),
+                )
+            }
             Spacer(Modifier.height(24.dp))
         }
 
-        FormattingToolbar(
-            onHeader = { editContent { prefixLine(it, "# ") } },
-            onBold = { editContent { wrapSelection(it, "**") } },
-            onItalic = { editContent { wrapSelection(it, "*") } },
-            onChecklist = { editContent { prefixLine(it, "- [ ] ") } },
-            onBullet = { editContent { prefixLine(it, "- ") } },
-            onNumbered = { editContent { prefixLine(it, "1. ") } },
-            onQuote = { editContent { prefixLine(it, "> ") } },
-            onCode = { editContent { wrapSelection(it, "`") } },
-            onDivider = { editContent { insert(it, "\n\n---\n\n") } },
-        )
+        if (state.type != NoteType.CHECKLIST) {
+            FormattingToolbar(
+                onHeader = { editContent { prefixLine(it, "# ") } },
+                onBold = { editContent { wrapSelection(it, "**") } },
+                onItalic = { editContent { wrapSelection(it, "*") } },
+                onChecklist = { editContent { prefixLine(it, "- [ ] ") } },
+                onBullet = { editContent { prefixLine(it, "- ") } },
+                onNumbered = { editContent { prefixLine(it, "1. ") } },
+                onQuote = { editContent { prefixLine(it, "> ") } },
+                onCode = { editContent { wrapSelection(it, "`") } },
+                onDivider = { editContent { insert(it, "\n\n---\n\n") } },
+            )
+        }
     }
 
     if (showColorSheet) {
@@ -453,6 +493,163 @@ private fun ColorSwatch(
                 contentDescription = "Selected",
                 tint = if (isNone) MaterialTheme.colorScheme.onSurfaceVariant else Color.White,
                 modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+}
+
+// ---- Interactive checklist -----------------------------------------------------
+
+private data class UiChecklistItem(
+    val id: String,
+    val text: String,
+    val checked: Boolean,
+)
+
+@Composable
+private fun ChecklistProgress(done: Int, total: Int) {
+    Text(
+        text = when {
+            total == 0 -> "No items yet"
+            done == total -> "All $total done 🎉"
+            else -> "$done of $total done"
+        },
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun ChecklistBody(
+    items: SnapshotStateList<UiChecklistItem>,
+    onChanged: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        items.forEach { item ->
+            key(item.id) {
+                ChecklistRow(
+                    item = item,
+                    onToggle = {
+                        val i = items.indexOfFirst { it.id == item.id }
+                        if (i >= 0) {
+                            items[i] = items[i].copy(checked = !items[i].checked)
+                            onChanged()
+                        }
+                    },
+                    onTextChange = { text ->
+                        val i = items.indexOfFirst { it.id == item.id }
+                        if (i >= 0) {
+                            items[i] = items[i].copy(text = text)
+                            onChanged()
+                        }
+                    },
+                    onDelete = {
+                        items.removeAll { it.id == item.id }
+                        if (items.isEmpty()) {
+                            items.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
+                        }
+                        onChanged()
+                    },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable {
+                    items.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
+                    onChanged()
+                }
+                .padding(vertical = 8.dp, horizontal = 4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = "Add item",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Add item",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChecklistRow(
+    item: UiChecklistItem,
+    onToggle: () -> Unit,
+    onTextChange: (String) -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(if (item.checked) MaterialTheme.colorScheme.primary else Color.Transparent)
+                .border(
+                    width = 2.dp,
+                    color = if (item.checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    shape = RoundedCornerShape(7.dp),
+                )
+                .clickable(onClick = onToggle),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (item.checked) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = "Done",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        BasicTextField(
+            value = item.text,
+            onValueChange = onTextChange,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                color = if (item.checked) MaterialTheme.colorScheme.onSurfaceVariant
+                else MaterialTheme.colorScheme.onBackground,
+                textDecoration = if (item.checked) TextDecoration.LineThrough else null,
+            ),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                if (item.text.isEmpty()) {
+                    Text(
+                        text = "List item",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    )
+                }
+                inner()
+            },
+        )
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onDelete),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Remove item",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
             )
         }
     }

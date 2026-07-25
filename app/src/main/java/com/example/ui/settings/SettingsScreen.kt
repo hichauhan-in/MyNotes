@@ -1,5 +1,7 @@
 package com.example.ui.settings
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -33,6 +35,8 @@ import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -49,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -178,10 +183,29 @@ fun SettingsScreen(
 
             // ---- About ----
             SettingsSection(title = "About", icon = Icons.Rounded.Info) {
-                AboutRow(label = "Version", value = "1.0")
+                val context = LocalContext.current
+                SettingsLinkRow(
+                    icon = Icons.Rounded.Person,
+                    title = "About the developer",
+                    subtitle = "hichauhan.in",
+                    trailingIcon = Icons.Rounded.OpenInNew,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.hichauhan.in/")),
+                            )
+                        }
+                    },
+                )
                 SettingsDivider()
-                AboutRow(label = "Made with", value = "Privacy first")
-                Spacer(Modifier.height(6.dp))
+                SettingsLinkRow(
+                    icon = Icons.Rounded.Info,
+                    title = "Application information",
+                    subtitle = "Version, licenses & credits",
+                    trailingLabel = "Soon",
+                    onClick = { },
+                )
+                Spacer(Modifier.height(10.dp))
                 Text(
                     text = "MyNotes+ keeps your thoughts private by design. Offline-first, encrypted at rest, yours alone.",
                     style = MaterialTheme.typography.bodySmall,
@@ -353,6 +377,60 @@ private fun InfoBanner(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface,
         )
+    }
+}
+
+@Composable
+private fun SettingsLinkRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    trailingIcon: ImageVector? = null,
+    trailingLabel: String? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        when {
+            trailingLabel != null -> Text(
+                text = trailingLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+
+            trailingIcon != null -> Icon(
+                imageVector = trailingIcon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 

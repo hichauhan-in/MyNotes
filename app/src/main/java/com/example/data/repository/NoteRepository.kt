@@ -4,11 +4,13 @@ import com.example.data.local.NoteDao
 import com.example.data.local.NoteEntity
 import com.example.data.security.EncryptionManager
 import com.example.domain.model.Note
+import com.example.domain.model.NoteType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 /**
  * Single source of truth for notes. Encryption / decryption happens here so the rest
@@ -41,6 +43,7 @@ class NoteRepository(private val noteDao: NoteDao) {
             folderId = note.folderId,
             tags = note.tags.joinToString(","),
             colorArgb = note.colorArgb,
+            type = note.type.name,
         )
         noteDao.insertNote(entity)
     }
@@ -73,6 +76,13 @@ class NoteRepository(private val noteDao: NoteDao) {
         noteDao.emptyTrash()
     }
 
+    /** Permanently deletes trashed notes last touched before [retentionDays] ago. No-op if 0. */
+    suspend fun purgeTrashOlderThan(retentionDays: Int) = withContext(Dispatchers.IO) {
+        if (retentionDays <= 0) return@withContext
+        val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(retentionDays.toLong())
+        noteDao.purgeTrashedBefore(cutoff)
+    }
+
     private fun NoteEntity.toNote() = Note(
         id = id,
         title = EncryptionManager.decrypt(encryptedTitle),
@@ -86,5 +96,6 @@ class NoteRepository(private val noteDao: NoteDao) {
         folderId = folderId,
         tags = tags.split(",").filter { it.isNotBlank() },
         colorArgb = colorArgb,
+        type = runCatching { NoteType.valueOf(type) }.getOrDefault(NoteType.TEXT),
     )
 }

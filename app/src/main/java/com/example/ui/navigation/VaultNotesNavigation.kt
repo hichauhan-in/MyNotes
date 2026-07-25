@@ -4,8 +4,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -37,26 +37,25 @@ private object Routes {
 @Composable
 fun MyNotesNavigation() {
     val navController = rememberNavController()
-    val dur = 300
+    val dur = 240
 
     NavHost(
         navController = navController,
         startDestination = Routes.HOME,
         enterTransition = {
-            slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it } +
-                fadeIn(tween(dur, easing = FastOutSlowInEasing))
+            fadeIn(tween(dur, easing = FastOutSlowInEasing)) +
+                scaleIn(tween(dur, easing = FastOutSlowInEasing), initialScale = 0.97f)
         },
         exitTransition = {
-            slideOutHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 6 } +
-                fadeOut(tween(dur, easing = FastOutSlowInEasing))
+            fadeOut(tween(160, easing = FastOutSlowInEasing))
         },
         popEnterTransition = {
-            slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 6 } +
-                fadeIn(tween(dur, easing = FastOutSlowInEasing))
+            fadeIn(tween(dur, easing = FastOutSlowInEasing)) +
+                scaleIn(tween(dur, easing = FastOutSlowInEasing), initialScale = 0.97f)
         },
         popExitTransition = {
-            slideOutHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it } +
-                fadeOut(tween(dur, easing = FastOutSlowInEasing))
+            fadeOut(tween(160, easing = FastOutSlowInEasing)) +
+                scaleOut(tween(160, easing = FastOutSlowInEasing), targetScale = 0.97f)
         },
     ) {
         composable(Routes.HOME) {

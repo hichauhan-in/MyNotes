@@ -27,6 +27,7 @@ data class NoteEntity(
     val folderId: String? = null,
     val tags: String = "", // comma separated
     val colorArgb: Int = 0, // 0 == default / no colour label
+    val type: String = "TEXT", // TEXT | CHECKLIST
 )
 
 @Entity(tableName = "folders")
