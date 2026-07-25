@@ -90,11 +90,14 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.example.data.attachments.AttachmentStore
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Note
 import com.example.ui.components.BrandGradientButton
@@ -678,6 +681,7 @@ private fun NoteCard(
     onMore: () -> Unit,
 ) {
     val accent = if (note.colorArgb != 0) Color(note.colorArgb) else null
+    val context = LocalContext.current
     Box(modifier = Modifier.fillMaxWidth()) {
         NeuCard(
             onClick = { if (selectionMode) onToggleSelect() else onOpen() },
@@ -686,6 +690,16 @@ private fun NoteCard(
             contentPadding = PaddingValues(0.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
+            if (note.attachments.isNotEmpty()) {
+                AsyncImage(
+                    model = AttachmentStore.fileFor(context, note.attachments.first()),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp),
+                )
+            }
             Row(modifier = Modifier.fillMaxWidth()) {
                 if (accent != null) {
                     Box(

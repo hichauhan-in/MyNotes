@@ -28,6 +28,7 @@ data class EditorUiState(
     val colorArgb: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    val attachments: List<String> = emptyList(),
     val saveStatus: SaveStatus = SaveStatus.Idle,
 ) {
     val wordCount: Int
@@ -43,7 +44,7 @@ data class EditorUiState(
     val speakingMinutes: Int
         get() = if (wordCount == 0) 0 else max(1, (wordCount / 130.0).roundToInt())
 
-    val hasContent: Boolean get() = title.isNotBlank() || content.isNotBlank()
+    val hasContent: Boolean get() = title.isNotBlank() || content.isNotBlank() || attachments.isNotEmpty()
 }
 
 class EditorViewModel : ViewModel() {
@@ -94,6 +95,7 @@ class EditorViewModel : ViewModel() {
                     colorArgb = note.colorArgb,
                     createdAt = note.createdAt,
                     updatedAt = note.updatedAt,
+                    attachments = note.attachments,
                     saveStatus = SaveStatus.Saved,
                 )
             }
@@ -127,6 +129,18 @@ class EditorViewModel : ViewModel() {
     fun setColor(colorArgb: Int) {
         dirty = true
         _state.value = _state.value.copy(colorArgb = colorArgb)
+        persistNow()
+    }
+
+    fun addAttachment(fileName: String) {
+        dirty = true
+        _state.value = _state.value.copy(attachments = _state.value.attachments + fileName)
+        persistNow()
+    }
+
+    fun removeAttachment(fileName: String) {
+        dirty = true
+        _state.value = _state.value.copy(attachments = _state.value.attachments - fileName)
         persistNow()
     }
 
@@ -164,6 +178,7 @@ class EditorViewModel : ViewModel() {
                     isPinned = snapshot.isPinned,
                     isFavorite = snapshot.isFavorite,
                     colorArgb = snapshot.colorArgb,
+                    attachments = snapshot.attachments,
                 )
             )
             persisted = true

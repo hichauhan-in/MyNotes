@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- App-private storage for note image attachments (OS file-based encrypted). -->
+    <files-path
+        name="attachments"
+        path="attachments/" />
+</paths>

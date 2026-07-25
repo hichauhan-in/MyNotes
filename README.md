@@ -20,6 +20,8 @@ never touches storage, and no account or login is ever required.
 - **Fast home dashboard** — staggered note grid with search and filter chips (All, Recent, Favorites, Pinned, Archived, Trash) plus a morphing “create” FAB.
 - **Multi‑select** — long‑press to select multiple notes and pin / favorite / archive / trash them in bulk. A per‑note `⋮` menu handles single‑note actions.
 - **Distraction‑free editor** — debounced auto‑save, a Markdown formatting toolbar, note color labels, and live word‑count / reading‑time stats.
+- **Checklists** — turn a note into an interactive, checkable to‑do list with live progress.
+- **Image attachments** — add photos from the **gallery** or capture live with the **camera**; images are stored in app‑private, on‑device storage and shown inline in the editor and as note thumbnails.
 - **App lock** — optional unlock with **fingerprint, face, or device PIN** (biometric / device‑credential).
 - **Organization** — pin, favorite, archive, color labels, and a recoverable Trash.
 - **Optional encrypted cloud backup** — off by default; when enabled, only encrypted blobs are uploaded (keys never leave your device).
@@ -119,7 +121,7 @@ A ready‑to‑publish privacy policy lives at [`docs/index.html`](docs/index.ht
 
 ## 🗺️ Roadmap
 
-Planned / in progress (see [`plan.txt`](plan.txt) for the full vision): rich‑text & checklists, drawing canvas, templates, tags & folders, reminders, full Google Drive encrypted sync, import/export, and home‑screen widgets.
+Planned / in progress (see [`plan.txt`](plan.txt) for the full vision): rich‑text formatting, drawing canvas, tags & folders, reminders, full Google Drive encrypted sync, import/export, and home‑screen widgets.
 
 ---
 

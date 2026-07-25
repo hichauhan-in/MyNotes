@@ -28,6 +28,7 @@ data class NoteEntity(
     val tags: String = "", // comma separated
     val colorArgb: Int = 0, // 0 == default / no colour label
     val type: String = "TEXT", // TEXT | CHECKLIST
+    val attachments: String = "", // comma separated image file names
 )
 
 @Entity(tableName = "folders")

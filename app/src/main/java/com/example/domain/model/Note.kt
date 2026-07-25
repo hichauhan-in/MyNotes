@@ -21,6 +21,8 @@ data class Note(
     val tags: List<String> = emptyList(),
     val colorArgb: Int = 0,
     val type: NoteType = NoteType.TEXT,
+    /** File names of image attachments stored in the app-private attachments dir. */
+    val attachments: List<String> = emptyList(),
 ) {
     val isChecklist: Boolean get() = type == NoteType.CHECKLIST
 

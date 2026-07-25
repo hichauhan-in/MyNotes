@@ -44,6 +44,7 @@ class NoteRepository(private val noteDao: NoteDao) {
             tags = note.tags.joinToString(","),
             colorArgb = note.colorArgb,
             type = note.type.name,
+            attachments = note.attachments.joinToString(","),
         )
         noteDao.insertNote(entity)
     }
@@ -97,5 +98,6 @@ class NoteRepository(private val noteDao: NoteDao) {
         tags = tags.split(",").filter { it.isNotBlank() },
         colorArgb = colorArgb,
         type = runCatching { NoteType.valueOf(type) }.getOrDefault(NoteType.TEXT),
+        attachments = attachments.split(",").filter { it.isNotBlank() },
     )
 }

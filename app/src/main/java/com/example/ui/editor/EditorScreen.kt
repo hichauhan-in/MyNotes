@@ -1,6 +1,9 @@
 package com.example.ui.editor
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -31,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
@@ -44,6 +48,8 @@ import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatQuote
 import androidx.compose.material.icons.rounded.HorizontalRule
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PhotoCamera
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Title
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -59,6 +65,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
@@ -68,6 +75,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
@@ -75,6 +84,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
+import com.example.data.attachments.AttachmentStore
 import com.example.domain.model.Checklist as ChecklistUtil
 import com.example.domain.model.ChecklistItem
 import com.example.domain.model.NoteType
@@ -82,7 +93,10 @@ import com.example.ui.components.NeuIconButton
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.NoteAccents
 import com.example.ui.theme.neumorphicRaised
+import java.io.File
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @Composable
 fun EditorScreen(
@@ -97,7 +111,29 @@ fun EditorScreen(
     var titleField by remember { mutableStateOf(TextFieldValue()) }
     var contentField by remember { mutableStateOf(TextFieldValue()) }
     var showColorSheet by remember { mutableStateOf(false) }
+    var showImagePicker by remember { mutableStateOf(false) }
     val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
+
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var pendingCameraFile by remember { mutableStateOf<File?>(null) }
+
+    val galleryLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch(Dispatchers.IO) {
+                AttachmentStore.importFromUri(context, uri)?.let { viewModel.addAttachment(it) }
+            }
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { success ->
+        val file = pendingCameraFile
+        if (success && file != null) viewModel.addAttachment(file.name) else file?.delete()
+        pendingCameraFile = null
+    }
 
     // Seed the editable fields once the note has been loaded / created.
     LaunchedEffect(state.id) {
@@ -192,17 +228,29 @@ fun EditorScreen(
                     done = checklistItems.count { it.checked && it.text.isNotBlank() },
                     total = checklistItems.count { it.text.isNotBlank() },
                 )
-                Spacer(Modifier.height(16.dp))
-                ChecklistBody(
-                    items = checklistItems,
-                    onChanged = { pushChecklist() },
-                )
             } else {
                 EditorMeta(
                     words = state.wordCount,
                     readingMinutes = state.readingMinutes,
                 )
-                Spacer(Modifier.height(16.dp))
+            }
+
+            Spacer(Modifier.height(16.dp))
+            AttachmentsSection(
+                attachments = state.attachments,
+                onAdd = { showImagePicker = true },
+                onRemove = { name ->
+                    AttachmentStore.delete(context, name)
+                    viewModel.removeAttachment(name)
+                },
+            )
+
+            if (state.type == NoteType.CHECKLIST) {
+                ChecklistBody(
+                    items = checklistItems,
+                    onChanged = { pushChecklist() },
+                )
+            } else {
                 BasicTextField(
                     value = contentField,
                     onValueChange = {
@@ -254,6 +302,28 @@ fun EditorScreen(
                 showColorSheet = false
             },
             onDismiss = { showColorSheet = false },
+        )
+    }
+
+    if (showImagePicker) {
+        ImagePickerSheet(
+            onGallery = {
+                showImagePicker = false
+                galleryLauncher.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            },
+            onCamera = {
+                showImagePicker = false
+                val file = AttachmentStore.newImageFile(context)
+                pendingCameraFile = file
+                runCatching { cameraLauncher.launch(AttachmentStore.uriForFile(context, file)) }
+                    .onFailure {
+                        file.delete()
+                        pendingCameraFile = null
+                    }
+            },
+            onDismiss = { showImagePicker = false },
         )
     }
 }
@@ -495,6 +565,138 @@ private fun ColorSwatch(
                 modifier = Modifier.size(22.dp),
             )
         }
+    }
+}
+
+// ---- Image attachments ---------------------------------------------------------
+
+@Composable
+private fun AttachmentsSection(
+    attachments: List<String>,
+    onAdd: () -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    Column(modifier = Modifier.fillMaxWidth()) {
+        attachments.forEach { name ->
+            key(name) {
+                AttachmentImage(
+                    file = AttachmentStore.fileFor(context, name),
+                    onRemove = { onRemove(name) },
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable(onClick = onAdd)
+                .padding(vertical = 8.dp, horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.AddPhotoAlternate,
+                contentDescription = "Add image",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = "Add image",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun AttachmentImage(file: File, onRemove: () -> Unit) {
+    Box(modifier = Modifier.fillMaxWidth()) {
+        AsyncImage(
+            model = file,
+            contentDescription = "Attached image",
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 420.dp)
+                .clip(RoundedCornerShape(16.dp)),
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(10.dp)
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Remove image",
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ImagePickerSheet(
+    onGallery: () -> Unit,
+    onCamera: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Add image",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(12.dp))
+            PickerRow(Icons.Rounded.PhotoLibrary, "Choose from gallery", onGallery)
+            PickerRow(Icons.Rounded.PhotoCamera, "Take a photo", onCamera)
+        }
+    }
+}
+
+@Composable
+private fun PickerRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(16.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
 
