@@ -43,10 +43,20 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Alarm
+import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Flight
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Payments
+import androidx.compose.material.icons.rounded.Restaurant
+import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.ShoppingCart
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Archive
@@ -75,6 +85,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -353,10 +365,13 @@ fun HomeScreen(
     }
 
     if (showTemplateCreator) {
-        TemplateCreatorSheet(
+        TemplateManagerSheet(
             templates = customTemplates,
             onCreate = { name, iconKey, content ->
                 viewModel.addCustomTemplate(name, iconKey, content)
+            },
+            onUpdate = { id, name, iconKey, content ->
+                viewModel.updateCustomTemplate(id, name, iconKey, content)
             },
             onDelete = { viewModel.deleteCustomTemplate(it) },
             onDismiss = { showTemplateCreator = false },
@@ -843,7 +858,7 @@ private fun ExpandableFab(
             exit = fadeOut() + slideOutVertically { it / 2 } + scaleOut(targetScale = 0.8f),
         ) {
             Column(horizontalAlignment = Alignment.End) {
-                FabAction("New template", Icons.Rounded.Style) { onCreateTemplate() }
+                FabAction("Manage templates", Icons.Rounded.Style) { onCreateTemplate() }
                 Spacer(Modifier.height(12.dp))
                 customTemplates.forEach { template ->
                     FabAction(template.name, templateIcon(template.iconKey)) {
@@ -1031,7 +1046,7 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "If MyNotes+ makes your day a little calmer, you can support its development.",
+                text = "If MyNotes+ makes your day a little calmer, you can support development of different utilities.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1039,7 +1054,7 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
             CoffeeOption(
                 icon = Icons.Rounded.CurrencyRupee,
                 name = "UPI",
-                subtitle = "Pay via any UPI app",
+                subtitle = "Contribute via any UPI app",
                 comingSoon = false,
                 onClick = {
                     val uri = Uri.parse("upi://pay").buildUpon()
@@ -1049,7 +1064,7 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
                         .build()
                     runCatching {
                         context.startActivity(
-                            Intent.createChooser(Intent(Intent.ACTION_VIEW, uri), "Pay via UPI"),
+                            Intent.createChooser(Intent(Intent.ACTION_VIEW, uri), "Support via UPI"),
                         )
                     }
                 },
@@ -1058,6 +1073,16 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
             CoffeeOption(Icons.Rounded.LocalCafe, "Ko-fi", "Support on ko-fi.com")
             Spacer(Modifier.height(12.dp))
             CoffeeOption(Icons.Rounded.Shop, "Playto", "Support on Playto")
+
+            Spacer(Modifier.height(20.dp))
+            Text(
+                text = "A voluntary tip — a friendly gesture, nothing more. It does not " +
+                    "unlock any features, remove any limits, or change how the app works. " +
+                    "MyNotes+ is completely free and always will be, and there's no " +
+                    "obligation to contribute.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+            )
         }
     }
 }
@@ -1112,7 +1137,7 @@ private fun CoffeeOption(
             }
         }
         Text(
-            text = if (comingSoon) "Coming soon" else "Pay",
+            text = if (comingSoon) "Coming soon" else "Open",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             color = if (comingSoon) MaterialTheme.colorScheme.onSecondaryContainer
@@ -1201,6 +1226,15 @@ private val templateIconOptions: List<Pair<String, ImageVector>> = listOf(
     "book" to Icons.Rounded.MenuBook,
     "travel" to Icons.Rounded.Flight,
     "shopping" to Icons.Rounded.ShoppingCart,
+    "fitness" to Icons.Rounded.FitnessCenter,
+    "finance" to Icons.Rounded.Payments,
+    "calendar" to Icons.Rounded.CalendarMonth,
+    "reminder" to Icons.Rounded.Alarm,
+    "study" to Icons.Rounded.School,
+    "code" to Icons.Rounded.Code,
+    "music" to Icons.Rounded.MusicNote,
+    "food" to Icons.Rounded.Restaurant,
+    "favorite" to Icons.Rounded.StarBorder,
 )
 
 private fun templateIcon(key: String): ImageVector =
@@ -1208,16 +1242,26 @@ private fun templateIcon(key: String): ImageVector =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TemplateCreatorSheet(
+private fun TemplateManagerSheet(
     templates: List<CustomTemplate>,
     onCreate: (name: String, iconKey: String, content: String) -> Unit,
+    onUpdate: (id: String, name: String, iconKey: String, content: String) -> Unit,
     onDelete: (id: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
+    var selectedTab by remember { mutableStateOf(0) }
+    var editingId by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
     var content by remember { mutableStateOf("") }
     var iconKey by remember { mutableStateOf("note") }
+
+    fun resetForm() {
+        editingId = null
+        name = ""
+        content = ""
+        iconKey = "note"
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1232,91 +1276,160 @@ private fun TemplateCreatorSheet(
                 .verticalScroll(rememberScrollState()),
         ) {
             Text(
-                text = "New template",
+                text = "Templates",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Create a reusable draft — it'll show up in the + menu.",
+                text = "Reusable drafts that show up in the + menu.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            Spacer(Modifier.height(18.dp))
-            TemplateLabel("Name")
-            TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
-
             Spacer(Modifier.height(16.dp))
-            TemplateLabel("Icon")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            TabRow(
+                selectedTabIndex = selectedTab,
+                containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.primary,
             ) {
-                templateIconOptions.forEach { (key, icon) ->
-                    IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
-                }
+                Tab(
+                    selected = selectedTab == 0,
+                    onClick = { selectedTab = 0 },
+                    text = { Text(if (editingId != null) "Edit" else "New") },
+                )
+                Tab(
+                    selected = selectedTab == 1,
+                    onClick = { selectedTab = 1 },
+                    text = { Text("Manage (${templates.size})") },
+                )
             }
 
-            Spacer(Modifier.height(16.dp))
-            TemplateLabel("Template text")
-            TemplateTextField(content, { content = it }, "Type your template…", minHeight = 120.dp)
+            Spacer(Modifier.height(18.dp))
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (selectedTab == 0) {
+                    TemplateLabel("Name")
+                    TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
 
-            Spacer(Modifier.height(20.dp))
-            BrandGradientButton(
-                text = "Save template",
-                onClick = {
-                    if (name.isNotBlank()) {
-                        onCreate(name.trim(), iconKey, content)
-                        name = ""
-                        content = ""
-                        iconKey = "note"
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            if (templates.isNotEmpty()) {
-                Spacer(Modifier.height(24.dp))
-                TemplateLabel("Your templates")
-                templates.forEach { template ->
+                    Spacer(Modifier.height(16.dp))
+                    TemplateLabel("Icon")
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Icon(
-                            imageVector = templateIcon(template.iconKey),
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp),
-                        )
-                        Spacer(Modifier.width(14.dp))
+                        templateIconOptions.forEach { (key, icon) ->
+                            IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    TemplateLabel("Template text")
+                    TemplateTextField(content, { content = it }, "Type your template…", minHeight = 120.dp)
+
+                    Spacer(Modifier.height(20.dp))
+                    BrandGradientButton(
+                        text = if (editingId != null) "Update template" else "Save template",
+                        onClick = {
+                            if (name.isNotBlank()) {
+                                val id = editingId
+                                if (id != null) {
+                                    onUpdate(id, name.trim(), iconKey, content)
+                                } else {
+                                    onCreate(name.trim(), iconKey, content)
+                                }
+                                resetForm()
+                                selectedTab = 1
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (editingId != null) {
+                        Spacer(Modifier.height(6.dp))
                         Text(
-                            text = template.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Box(
+                            text = "Cancel edit",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .clickable { onDelete(template.id) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = "Delete template",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(18.dp),
-                            )
+                                .align(Alignment.CenterHorizontally)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { resetForm() }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                } else {
+                    if (templates.isEmpty()) {
+                        Text(
+                            text = "No templates yet. Create one from the New tab.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 12.dp),
+                        )
+                    } else {
+                        templates.forEach { template ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = templateIcon(template.iconKey),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Spacer(Modifier.width(14.dp))
+                                Text(
+                                    text = template.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            editingId = template.id
+                                            name = template.name
+                                            iconKey = template.iconKey
+                                            content = template.content
+                                            selectedTab = 0
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Edit,
+                                        contentDescription = "Edit template",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            if (editingId == template.id) resetForm()
+                                            onDelete(template.id)
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Delete,
+                                        contentDescription = "Delete template",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }

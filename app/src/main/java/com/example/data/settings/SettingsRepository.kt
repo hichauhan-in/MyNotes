@@ -99,6 +99,13 @@ class SettingsRepository(context: Context) {
         prefs[Keys.TEMPLATES] = serializeTemplates(current + template)
     }
 
+    suspend fun updateTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(
+            current.map { if (it.id == template.id) template else it },
+        )
+    }
+
     suspend fun deleteTemplate(id: String) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
         prefs[Keys.TEMPLATES] = serializeTemplates(current.filterNot { it.id == id })

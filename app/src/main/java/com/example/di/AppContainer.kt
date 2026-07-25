@@ -36,7 +36,7 @@ object AppContainer {
                 // Any other unknown schema jump: wipe & rebuild rather than crash.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
-            noteRepository = NoteRepository(database!!.noteDao())
+            noteRepository = NoteRepository(database!!.noteDao(), context.applicationContext)
         }
         if (settingsRepository == null) {
             settingsRepository = SettingsRepository(context.applicationContext)

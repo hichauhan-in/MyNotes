@@ -24,7 +24,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Lock
@@ -69,12 +68,7 @@ private val pages = listOf(
     OnboardingPage(
         icon = Icons.Rounded.Checklist,
         title = "Notes, checklists & more",
-        subtitle = "Write freely or build interactive checklists you can tick off. Pin, favorite, colour and archive to stay organised.",
-    ),
-    OnboardingPage(
-        icon = Icons.Rounded.CheckCircle,
-        title = "You're all set",
-        subtitle = "Everything works offline, instantly. Add an app lock any time from Settings. Let's begin.",
+        subtitle = "Write freely or build interactive checklists you can tick off. Pin, favourite, colour and archive to stay organised. Everything works offline, instantly — let's begin.",
     ),
 )
 

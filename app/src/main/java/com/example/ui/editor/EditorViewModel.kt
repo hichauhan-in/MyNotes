@@ -3,6 +3,7 @@ package com.example.ui.editor
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.di.AppContainer
+import com.example.domain.model.AttachmentMarkup
 import com.example.domain.model.Note
 import com.example.domain.model.NoteType
 import kotlinx.coroutines.Job
@@ -32,7 +33,8 @@ data class EditorUiState(
     val saveStatus: SaveStatus = SaveStatus.Idle,
 ) {
     val wordCount: Int
-        get() = content.trim().let { if (it.isEmpty()) 0 else it.split(Regex("\\s+")).size }
+        get() = AttachmentMarkup.stripTokens(content).trim()
+            .let { if (it.isEmpty()) 0 else it.split(Regex("\\s+")).size }
 
     val charCount: Int get() = content.length
 
@@ -110,8 +112,23 @@ class EditorViewModel : ViewModel() {
 
     fun onContentChanged(value: String) {
         dirty = true
-        _state.value = _state.value.copy(content = value, saveStatus = SaveStatus.Editing)
+        _state.value = _state.value.copy(
+            content = value,
+            attachments = AttachmentMarkup.fileNames(value),
+            saveStatus = SaveStatus.Editing,
+        )
         scheduleAutoSave()
+    }
+
+    /** Commit a content change immediately (e.g. after inserting or removing an image). */
+    fun commitContentNow(value: String) {
+        dirty = true
+        _state.value = _state.value.copy(
+            content = value,
+            attachments = AttachmentMarkup.fileNames(value),
+            saveStatus = SaveStatus.Editing,
+        )
+        flush()
     }
 
     fun togglePin() {
@@ -129,18 +146,6 @@ class EditorViewModel : ViewModel() {
     fun setColor(colorArgb: Int) {
         dirty = true
         _state.value = _state.value.copy(colorArgb = colorArgb)
-        persistNow()
-    }
-
-    fun addAttachment(fileName: String) {
-        dirty = true
-        _state.value = _state.value.copy(attachments = _state.value.attachments + fileName)
-        persistNow()
-    }
-
-    fun removeAttachment(fileName: String) {
-        dirty = true
-        _state.value = _state.value.copy(attachments = _state.value.attachments - fileName)
         persistNow()
     }
 

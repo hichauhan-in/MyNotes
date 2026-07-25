@@ -70,6 +70,13 @@ class HomeViewModel : ViewModel() {
         settings.addTemplate(CustomTemplate(name = name, iconKey = iconKey, content = content))
     }
 
+    fun updateCustomTemplate(id: String, name: String, iconKey: String, content: String) =
+        viewModelScope.launch {
+            settings.updateTemplate(
+                CustomTemplate(id = id, name = name, iconKey = iconKey, content = content),
+            )
+        }
+
     fun deleteCustomTemplate(id: String) = viewModelScope.launch {
         settings.deleteTemplate(id)
     }

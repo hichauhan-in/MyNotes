@@ -32,11 +32,12 @@ data class Note(
                 (if (it.checked) "✓ " else "○ ") + it.text
             }.trim()
         } else {
-            content.trim().replace(Regex("\\s+"), " ")
+            AttachmentMarkup.stripTokens(content).trim().replace(Regex("\\s+"), " ")
         }
 
     val wordCount: Int
-        get() = content.trim().let { if (it.isEmpty()) 0 else it.split(Regex("\\s+")).size }
+        get() = AttachmentMarkup.stripTokens(content).trim()
+            .let { if (it.isEmpty()) 0 else it.split(Regex("\\s+")).size }
 
     /** For checklist notes: number of completed items and total items. */
     val checklistDone: Int get() = if (isChecklist) Checklist.parse(content).count { it.checked } else 0

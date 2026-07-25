@@ -40,6 +40,12 @@ interface NoteDao {
 
     @Query("DELETE FROM notes WHERE isTrashed = 1 AND updatedAt < :cutoff")
     suspend fun purgeTrashedBefore(cutoff: Long)
+
+    @Query("SELECT attachments FROM notes WHERE isTrashed = 1")
+    suspend fun getTrashedAttachments(): List<String>
+
+    @Query("SELECT attachments FROM notes WHERE isTrashed = 1 AND updatedAt < :cutoff")
+    suspend fun getPurgeableAttachments(cutoff: Long): List<String>
 }
 
 @Dao

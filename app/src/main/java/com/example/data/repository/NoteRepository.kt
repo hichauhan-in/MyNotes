@@ -1,5 +1,7 @@
 package com.example.data.repository
 
+import android.content.Context
+import com.example.data.attachments.AttachmentStore
 import com.example.data.local.NoteDao
 import com.example.data.local.NoteEntity
 import com.example.data.security.EncryptionManager
@@ -16,7 +18,10 @@ import java.util.concurrent.TimeUnit
  * Single source of truth for notes. Encryption / decryption happens here so the rest
  * of the app only ever deals with plaintext [Note] models held in memory.
  */
-class NoteRepository(private val noteDao: NoteDao) {
+class NoteRepository(
+    private val noteDao: NoteDao,
+    private val appContext: Context,
+) {
 
     val allNotes: Flow<List<Note>> = noteDao.getAllNotes().map { entities ->
         entities.map { it.toNote() }
@@ -70,10 +75,12 @@ class NoteRepository(private val noteDao: NoteDao) {
     }
 
     suspend fun deletePermanently(id: String) = withContext(Dispatchers.IO) {
+        noteDao.getNoteById(id)?.let { deleteAttachmentFiles(it.attachments) }
         noteDao.deleteNoteById(id)
     }
 
     suspend fun emptyTrash() = withContext(Dispatchers.IO) {
+        noteDao.getTrashedAttachments().forEach { deleteAttachmentFiles(it) }
         noteDao.emptyTrash()
     }
 
@@ -81,7 +88,15 @@ class NoteRepository(private val noteDao: NoteDao) {
     suspend fun purgeTrashOlderThan(retentionDays: Int) = withContext(Dispatchers.IO) {
         if (retentionDays <= 0) return@withContext
         val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(retentionDays.toLong())
+        noteDao.getPurgeableAttachments(cutoff).forEach { deleteAttachmentFiles(it) }
         noteDao.purgeTrashedBefore(cutoff)
+    }
+
+    /** Removes the on-disk image files backing a note (comma-separated file names). */
+    private fun deleteAttachmentFiles(attachments: String) {
+        attachments.split(",")
+            .filter { it.isNotBlank() }
+            .forEach { AttachmentStore.delete(appContext, it) }
     }
 
     private fun NoteEntity.toNote() = Note(

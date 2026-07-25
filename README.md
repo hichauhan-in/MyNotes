@@ -21,7 +21,8 @@ never touches storage, and no account or login is ever required.
 - **Multi‑select** — long‑press to select multiple notes and pin / favorite / archive / trash them in bulk. A per‑note `⋮` menu handles single‑note actions.
 - **Distraction‑free editor** — debounced auto‑save, a Markdown formatting toolbar, note color labels, and live word‑count / reading‑time stats.
 - **Checklists** — turn a note into an interactive, checkable to‑do list with live progress.
-- **Image attachments** — add photos from the **gallery** or capture live with the **camera**; images are stored in app‑private, on‑device storage and shown inline in the editor and as note thumbnails.
+- **Image attachments** — insert photos from the **gallery** or capture live with the **camera**, placed **inline at your cursor** so text and images can be interleaved freely. Each note keeps its own private, on‑device copy (removed with the note); captures never leave the app unless you export them.
+- **Reusable templates** — build your own note templates with custom icons and manage them in a tabbed New / Manage sheet.
 - **App lock** — optional unlock with **fingerprint, face, or device PIN** (biometric / device‑credential).
 - **Organization** — pin, favorite, archive, color labels, and a recoverable Trash.
 - **Optional encrypted cloud backup** — off by default; when enabled, only encrypted blobs are uploaded (keys never leave your device).

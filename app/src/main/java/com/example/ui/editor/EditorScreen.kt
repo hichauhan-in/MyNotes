@@ -71,6 +71,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
@@ -86,6 +87,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.attachments.AttachmentStore
+import com.example.domain.model.AttachmentMarkup
 import com.example.domain.model.Checklist as ChecklistUtil
 import com.example.domain.model.ChecklistItem
 import com.example.domain.model.NoteType
@@ -97,6 +99,7 @@ import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun EditorScreen(
@@ -109,21 +112,85 @@ fun EditorScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
-    var contentField by remember { mutableStateOf(TextFieldValue()) }
     var showColorSheet by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
+    val blocks = remember { mutableStateListOf<EditorBlock>() }
+    var focusedBlockId by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var pendingCameraFile by remember { mutableStateOf<File?>(null) }
 
+    fun pushBlocks(immediate: Boolean) {
+        val text = serializeBlocks(blocks)
+        if (immediate) viewModel.commitContentNow(text) else viewModel.onContentChanged(text)
+    }
+
+    fun onTextBlockChange(id: String, value: TextFieldValue) {
+        val idx = blocks.indexOfFirst { it.id == id }
+        if (idx >= 0 && blocks[idx] is TextBlock) {
+            blocks[idx] = TextBlock(id, value)
+            pushBlocks(immediate = false)
+        }
+    }
+
+    fun editFocusedBlock(transform: (TextFieldValue) -> TextFieldValue) {
+        val focused = blocks.indexOfFirst { it.id == focusedBlockId }
+        val idx = if (focused >= 0 && blocks[focused] is TextBlock) focused
+        else blocks.indexOfLast { it is TextBlock }
+        if (idx >= 0) {
+            val tb = blocks[idx] as TextBlock
+            blocks[idx] = TextBlock(tb.id, transform(tb.value))
+            pushBlocks(immediate = false)
+        }
+    }
+
+    fun insertImageAtCursor(fileName: String) {
+        val idx = blocks.indexOfFirst { it.id == focusedBlockId }
+        if (idx >= 0 && blocks[idx] is TextBlock) {
+            val tb = blocks[idx] as TextBlock
+            val cursor = tb.value.selection.min.coerceIn(0, tb.value.text.length)
+            val before = tb.value.text.substring(0, cursor)
+            val after = tb.value.text.substring(cursor)
+            blocks[idx] = TextBlock(tb.id, TextFieldValue(before, TextRange(before.length)))
+            blocks.add(idx + 1, ImageBlock(newBlockId(), fileName))
+            blocks.add(idx + 2, TextBlock(newBlockId(), TextFieldValue(after)))
+        } else {
+            blocks.add(ImageBlock(newBlockId(), fileName))
+            blocks.add(TextBlock(newBlockId(), TextFieldValue("")))
+        }
+        pushBlocks(immediate = true)
+    }
+
+    fun removeImageBlock(blockId: String) {
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx < 0) return
+        val fileName = (blocks[idx] as? ImageBlock)?.fileName
+        blocks.removeAt(idx)
+        // Merge the text blocks that surrounded the image so the cursor flows naturally.
+        if (idx - 1 >= 0 && idx < blocks.size && blocks[idx - 1] is TextBlock && blocks[idx] is TextBlock) {
+            val a = blocks[idx - 1] as TextBlock
+            val b = blocks[idx] as TextBlock
+            val merged = when {
+                a.value.text.isEmpty() -> b.value.text
+                b.value.text.isEmpty() -> a.value.text
+                else -> a.value.text + "\n" + b.value.text
+            }
+            blocks[idx - 1] = TextBlock(a.id, TextFieldValue(merged, TextRange(a.value.text.length)))
+            blocks.removeAt(idx)
+        }
+        fileName?.let { AttachmentStore.delete(context, it) }
+        pushBlocks(immediate = true)
+    }
+
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri != null) {
-            scope.launch(Dispatchers.IO) {
-                AttachmentStore.importFromUri(context, uri)?.let { viewModel.addAttachment(it) }
+            scope.launch {
+                val name = withContext(Dispatchers.IO) { AttachmentStore.importFromUri(context, uri) }
+                if (name != null) insertImageAtCursor(name)
             }
         }
     }
@@ -131,14 +198,13 @@ fun EditorScreen(
         ActivityResultContracts.TakePicture(),
     ) { success ->
         val file = pendingCameraFile
-        if (success && file != null) viewModel.addAttachment(file.name) else file?.delete()
+        if (success && file != null) insertImageAtCursor(file.name) else file?.delete()
         pendingCameraFile = null
     }
 
     // Seed the editable fields once the note has been loaded / created.
     LaunchedEffect(state.id) {
         titleField = TextFieldValue(state.title, TextRange(state.title.length))
-        contentField = TextFieldValue(state.content, TextRange(state.content.length))
         if (state.type == NoteType.CHECKLIST) {
             checklistItems.clear()
             ChecklistUtil.parse(state.content).forEach {
@@ -147,6 +213,18 @@ fun EditorScreen(
             if (checklistItems.isEmpty()) {
                 checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
             }
+        } else {
+            val parsed = parseContentToBlocks(state.content).toMutableList()
+            // Migrate legacy notes whose images were kept only in `attachments`.
+            if (parsed.none { it is ImageBlock } && state.attachments.isNotEmpty()) {
+                state.attachments.forEach { name ->
+                    parsed.add(ImageBlock(newBlockId(), name))
+                    parsed.add(TextBlock(newBlockId(), TextFieldValue("")))
+                }
+            }
+            blocks.clear()
+            blocks.addAll(parsed)
+            focusedBlockId = parsed.firstOrNull { it is TextBlock }?.id
         }
     }
 
@@ -164,12 +242,6 @@ fun EditorScreen(
     }
 
     BackHandler { leave() }
-
-    fun editContent(transform: (TextFieldValue) -> TextFieldValue) {
-        val updated = transform(contentField)
-        contentField = updated
-        viewModel.onContentChanged(updated.text)
-    }
 
     Column(
         modifier = Modifier
@@ -236,60 +308,49 @@ fun EditorScreen(
             }
 
             Spacer(Modifier.height(16.dp))
-            AttachmentsSection(
-                attachments = state.attachments,
-                onAdd = { showImagePicker = true },
-                onRemove = { name ->
-                    AttachmentStore.delete(context, name)
-                    viewModel.removeAttachment(name)
-                },
-            )
-
             if (state.type == NoteType.CHECKLIST) {
                 ChecklistBody(
                     items = checklistItems,
                     onChanged = { pushChecklist() },
                 )
             } else {
-                BasicTextField(
-                    value = contentField,
-                    onValueChange = {
-                        contentField = it
-                        viewModel.onContentChanged(it.text)
-                    },
-                    textStyle = MaterialTheme.typography.bodyLarge.copy(
-                        color = MaterialTheme.colorScheme.onBackground,
-                    ),
-                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                    decorationBox = { inner ->
-                        if (contentField.text.isEmpty()) {
-                            Text(
-                                text = "Start writing your thoughts…",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                blocks.forEachIndexed { index, block ->
+                    key(block.id) {
+                        when (block) {
+                            is TextBlock -> EditorTextBlock(
+                                value = block.value,
+                                showHint = blocks.size == 1 && block.value.text.isEmpty(),
+                                isLast = index == blocks.lastIndex,
+                                onValueChange = { onTextBlockChange(block.id, it) },
+                                onFocused = { focusedBlockId = block.id },
                             )
+
+                            is ImageBlock -> {
+                                AttachmentImage(
+                                    file = AttachmentStore.fileFor(context, block.fileName),
+                                    onRemove = { removeImageBlock(block.id) },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
                         }
-                        inner()
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 320.dp),
-                )
+                    }
+                }
             }
             Spacer(Modifier.height(24.dp))
         }
 
         if (state.type != NoteType.CHECKLIST) {
             FormattingToolbar(
-                onHeader = { editContent { prefixLine(it, "# ") } },
-                onBold = { editContent { wrapSelection(it, "**") } },
-                onItalic = { editContent { wrapSelection(it, "*") } },
-                onChecklist = { editContent { prefixLine(it, "- [ ] ") } },
-                onBullet = { editContent { prefixLine(it, "- ") } },
-                onNumbered = { editContent { prefixLine(it, "1. ") } },
-                onQuote = { editContent { surround(it, "\"", "\"") } },
-                onCode = { editContent { surround(it, "[", "]") } },
-                onDivider = { editContent { insert(it, "\n\n---\n\n") } },
+                onImage = { showImagePicker = true },
+                onHeader = { editFocusedBlock { prefixLine(it, "# ") } },
+                onBold = { editFocusedBlock { wrapSelection(it, "**") } },
+                onItalic = { editFocusedBlock { wrapSelection(it, "*") } },
+                onChecklist = { editFocusedBlock { prefixLine(it, "- [ ] ") } },
+                onBullet = { editFocusedBlock { prefixLine(it, "- ") } },
+                onNumbered = { editFocusedBlock { prefixLine(it, "1. ") } },
+                onQuote = { editFocusedBlock { surround(it, "\"", "\"") } },
+                onCode = { editFocusedBlock { surround(it, "[", "]") } },
+                onDivider = { editFocusedBlock { insert(it, "\n\n---\n\n") } },
             )
         }
     }
@@ -432,6 +493,7 @@ private fun EditorMeta(words: Int, readingMinutes: Int) {
 
 @Composable
 private fun FormattingToolbar(
+    onImage: () -> Unit,
     onHeader: () -> Unit,
     onBold: () -> Unit,
     onItalic: () -> Unit,
@@ -457,6 +519,14 @@ private fun FormattingToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
+        ToolbarImageButton(onImage)
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 4.dp)
+                .height(26.dp)
+                .width(1.dp)
+                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
+        )
         ToolbarButton(Icons.Rounded.Title, "Heading", onHeader)
         ToolbarButton(Icons.Rounded.FormatBold, "Bold", onBold)
         ToolbarButton(Icons.Rounded.FormatItalic, "Italic", onItalic)
@@ -466,6 +536,33 @@ private fun FormattingToolbar(
         ToolbarButton(Icons.Rounded.FormatQuote, "Quotes", onQuote)
         ToolbarButton(Icons.Rounded.Code, "Brackets", onCode)
         ToolbarButton(Icons.Rounded.HorizontalRule, "Divider", onDivider)
+    }
+}
+
+/** The image button is deliberately styled differently — a raised, tinted tile — so
+ *  adding an image reads as the primary action in the toolbar. */
+@Composable
+private fun ToolbarImageButton(onClick: () -> Unit) {
+    val neu = LocalNeuColors.current
+    Box(
+        modifier = Modifier
+            .size(42.dp)
+            .neumorphicRaised(13.dp, neu, elevation = 6.dp)
+            .clip(RoundedCornerShape(13.dp))
+            .background(MaterialTheme.colorScheme.primary)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.AddPhotoAlternate,
+            contentDescription = "Add image",
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(22.dp),
+        )
     }
 }
 
@@ -568,47 +665,38 @@ private fun ColorSwatch(
     }
 }
 
-// ---- Image attachments ---------------------------------------------------------
+// ---- Inline editor blocks (text + images) -------------------------------------
 
 @Composable
-private fun AttachmentsSection(
-    attachments: List<String>,
-    onAdd: () -> Unit,
-    onRemove: (String) -> Unit,
+private fun EditorTextBlock(
+    value: TextFieldValue,
+    showHint: Boolean,
+    isLast: Boolean,
+    onValueChange: (TextFieldValue) -> Unit,
+    onFocused: () -> Unit,
 ) {
-    val context = LocalContext.current
-    Column(modifier = Modifier.fillMaxWidth()) {
-        attachments.forEach { name ->
-            key(name) {
-                AttachmentImage(
-                    file = AttachmentStore.fileFor(context, name),
-                    onRemove = { onRemove(name) },
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
+            color = MaterialTheme.colorScheme.onBackground,
+        ),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        decorationBox = { inner ->
+            if (showHint) {
+                Text(
+                    text = "Start writing your thoughts…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                 )
-                Spacer(Modifier.height(10.dp))
             }
-        }
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
-                .clickable(onClick = onAdd)
-                .padding(vertical = 8.dp, horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.AddPhotoAlternate,
-                contentDescription = "Add image",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = "Add image",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-    }
+            inner()
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = if (isLast) 220.dp else 44.dp)
+            .onFocusChanged { if (it.isFocused) onFocused() },
+    )
 }
 
 @Composable
@@ -894,3 +982,48 @@ private fun insert(value: TextFieldValue, snippet: String): TextFieldValue {
     val newText = text.substring(0, start) + snippet + text.substring(value.selection.max)
     return TextFieldValue(newText, TextRange(start + snippet.length))
 }
+
+// ---- Inline block model --------------------------------------------------------
+//
+// A note body is a flat string, but images can live anywhere inside it as a token
+// on their own line (see AttachmentMarkup). For editing we split that string into an
+// ordered list of text and image blocks, then serialize back to a string on save.
+
+private sealed interface EditorBlock {
+    val id: String
+}
+
+private data class TextBlock(override val id: String, val value: TextFieldValue) : EditorBlock
+
+private data class ImageBlock(override val id: String, val fileName: String) : EditorBlock
+
+private fun newBlockId(): String = UUID.randomUUID().toString()
+
+private fun parseContentToBlocks(content: String): List<EditorBlock> {
+    val result = mutableListOf<EditorBlock>()
+    val textLines = mutableListOf<String>()
+    fun flushText() {
+        result.add(TextBlock(newBlockId(), TextFieldValue(textLines.joinToString("\n"))))
+        textLines.clear()
+    }
+    content.split("\n").forEach { line ->
+        val image = AttachmentMarkup.imageFileName(line)
+        if (image != null) {
+            flushText()
+            result.add(ImageBlock(newBlockId(), image))
+        } else {
+            textLines.add(line)
+        }
+    }
+    // Always keep a trailing text block so there is somewhere to type after an image.
+    flushText()
+    return result
+}
+
+private fun serializeBlocks(blocks: List<EditorBlock>): String =
+    blocks.joinToString("\n") { block ->
+        when (block) {
+            is TextBlock -> block.value.text
+            is ImageBlock -> AttachmentMarkup.token(block.fileName)
+        }
+    }
