@@ -58,6 +58,9 @@ class HomeViewModel : ViewModel() {
     private val _filter = MutableStateFlow(NoteFilter.ALL)
     val filter: StateFlow<NoteFilter> = _filter.asStateFlow()
 
+    private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedIds: StateFlow<Set<String>> = _selectedIds.asStateFlow()
+
     val uiState: StateFlow<HomeUiState> =
         combine(repository.allNotes, _query, _filter) { notes, query, filter ->
             buildState(notes, query, filter)
@@ -99,7 +102,35 @@ class HomeViewModel : ViewModel() {
     }
 
     fun onQueryChanged(value: String) { _query.value = value }
-    fun onFilterChanged(value: NoteFilter) { _filter.value = value }
+
+    fun onFilterChanged(value: NoteFilter) {
+        _filter.value = value
+        clearSelection()
+    }
+
+    // ---- Multi-select ----
+    fun toggleSelection(id: String) {
+        val current = _selectedIds.value.toMutableSet()
+        if (!current.add(id)) current.remove(id)
+        _selectedIds.value = current
+    }
+
+    fun selectAll(ids: List<String>) { _selectedIds.value = ids.toSet() }
+
+    fun clearSelection() { _selectedIds.value = emptySet() }
+
+    private fun runOnSelection(action: suspend (String) -> Unit) {
+        val ids = _selectedIds.value.toList()
+        _selectedIds.value = emptySet()
+        viewModelScope.launch { ids.forEach { action(it) } }
+    }
+
+    fun bulkPin() = runOnSelection { repository.setPinned(it, true) }
+    fun bulkFavorite() = runOnSelection { repository.setFavorite(it, true) }
+    fun bulkArchive() = runOnSelection { repository.setArchived(it, true) }
+    fun bulkTrash() = runOnSelection { repository.setTrashed(it, true) }
+    fun bulkRestore() = runOnSelection { repository.setTrashed(it, false) }
+    fun bulkDeleteForever() = runOnSelection { repository.deletePermanently(it) }
 
     fun togglePin(note: Note) {
         viewModelScope.launch { repository.setPinned(note.id, !note.isPinned) }

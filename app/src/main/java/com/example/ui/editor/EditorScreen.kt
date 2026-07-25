@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -92,7 +93,9 @@ fun EditorScreen(
         contentField = TextFieldValue(state.content, TextRange(state.content.length))
     }
 
+    val focusManager = LocalFocusManager.current
     fun leave() {
+        focusManager.clearFocus(force = true)
         viewModel.flush()
         onNavigateBack()
     }
@@ -118,7 +121,10 @@ fun EditorScreen(
             onTogglePin = viewModel::togglePin,
             onToggleFavorite = viewModel::toggleFavorite,
             onColor = { showColorSheet = true },
-            onDelete = { viewModel.deleteToTrash { onNavigateBack() } },
+            onDelete = {
+                focusManager.clearFocus(force = true)
+                viewModel.deleteToTrash { onNavigateBack() }
+            },
         )
 
         Column(

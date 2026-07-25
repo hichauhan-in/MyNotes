@@ -2,7 +2,6 @@ package com.example
 
 import android.os.Bundle
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,19 +10,28 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.settings.AppSettings
 import com.example.di.AppContainer
+import com.example.ui.lock.AppLockGate
 import com.example.ui.navigation.MyNotesNavigation
 import com.example.ui.theme.MyNotesTheme
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        val settingsRepository = AppContainer.settingsRepository!!
+        // Read the persisted settings once up front so the theme / lock state is
+        // correct on the very first frame (no flash of the wrong theme or content).
+        val initialSettings = runBlocking { settingsRepository.settings.first() }
+
         setContent {
-            val settingsFlow = AppContainer.settingsRepository!!.settings
-            val settings by settingsFlow.collectAsStateWithLifecycle(initialValue = AppSettings())
+            val settings by settingsRepository.settings
+                .collectAsStateWithLifecycle(initialValue = initialSettings)
 
             // Optionally hide the content from the recent-apps preview / screenshots.
             LaunchedEffect(settings.hideFromRecents) {
@@ -42,7 +50,9 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
                 ) {
-                    MyNotesNavigation()
+                    AppLockGate(enabled = settings.appLockEnabled) {
+                        MyNotesNavigation()
+                    }
                 }
             }
         }

@@ -137,7 +137,7 @@ fun SettingsScreen(
                 ToggleRow(
                     icon = Icons.Rounded.Fingerprint,
                     title = "App lock",
-                    subtitle = "Require unlock to open MyNotes",
+                    subtitle = "Require fingerprint or screen lock to open",
                     checked = settings.appLockEnabled,
                     onCheckedChange = viewModel::setAppLockEnabled,
                 )
@@ -183,7 +183,7 @@ fun SettingsScreen(
                 AboutRow(label = "Made with", value = "Privacy first")
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "MyNotes keeps your thoughts private by design. Offline-first, encrypted at rest, yours alone.",
+                    text = "MyNotes+ keeps your thoughts private by design. Offline-first, encrypted at rest, yours alone.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

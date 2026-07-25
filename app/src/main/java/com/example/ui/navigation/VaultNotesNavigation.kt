@@ -1,9 +1,11 @@
 package com.example.ui.navigation
 
-import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -35,22 +37,26 @@ private object Routes {
 @Composable
 fun MyNotesNavigation() {
     val navController = rememberNavController()
-    val slideDuration = 320
+    val dur = 300
 
     NavHost(
         navController = navController,
         startDestination = Routes.HOME,
         enterTransition = {
-            slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Start, tween(slideDuration)) + fadeIn(tween(slideDuration))
+            slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it } +
+                fadeIn(tween(dur, easing = FastOutSlowInEasing))
         },
         exitTransition = {
-            fadeOut(tween(slideDuration))
+            slideOutHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 6 } +
+                fadeOut(tween(dur, easing = FastOutSlowInEasing))
         },
         popEnterTransition = {
-            fadeIn(tween(slideDuration))
+            slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 6 } +
+                fadeIn(tween(dur, easing = FastOutSlowInEasing))
         },
         popExitTransition = {
-            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.End, tween(slideDuration)) + fadeOut(tween(slideDuration))
+            slideOutHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it } +
+                fadeOut(tween(dur, easing = FastOutSlowInEasing))
         },
     ) {
         composable(Routes.HOME) {
