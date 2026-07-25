@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Privacy Policy for MyNotes+ — an offline-first, privacy-first, encrypted note-taking app for Android." />
+  <meta name="robots" content="index, follow" />
+  <title>MyNotes+ — Privacy Policy</title>
+  <style>
+    :root {
+      --indigo: #6d5ef6;
+      --violet: #9b5de5;
+      --ink: #1a1b22;
+      --muted: #5b5f70;
+      --bg: #f3f4fb;
+      --card: #ffffff;
+      --border: #e6e7f2;
+      --teal: #14b8a6;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--indigo); }
+
+    .hero {
+      background: linear-gradient(135deg, #6d5ef6 0%, #7c5cf0 55%, #9b5de5 100%);
+      color: #fff;
+      padding: 64px 24px 72px;
+      text-align: center;
+    }
+
+    .badge {
+      width: 72px; height: 72px;
+      margin: 0 auto 20px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.16);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 34px;
+      backdrop-filter: blur(6px);
+    }
+
+    .hero h1 { margin: 0; font-size: 2.1rem; letter-spacing: -0.5px; }
+    .hero p { margin: 10px 0 0; opacity: 0.92; font-size: 1.05rem; }
+    .hero .updated { display: inline-block; margin-top: 18px; font-size: 0.85rem; background: rgba(255,255,255,0.18); padding: 6px 14px; border-radius: 50px; }
+
+    .wrap { max-width: 780px; margin: -40px auto 0; padding: 0 20px 64px; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 28px 30px;
+      margin-bottom: 22px;
+      box-shadow: 0 12px 40px rgba(45, 40, 90, 0.06);
+    }
+
+    h2 { font-size: 1.25rem; margin: 4px 0 12px; display: flex; align-items: center; gap: 10px; }
+    h2 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--indigo); flex: none; }
+    h3 { font-size: 1.02rem; margin: 20px 0 6px; }
+    p, li { color: #2c2e3c; }
+    .muted { color: var(--muted); }
+
+    ul { padding-left: 20px; margin: 8px 0; }
+    li { margin: 5px 0; }
+
+    .pill {
+      display: inline-block; font-size: 0.8rem; font-weight: 600;
+      color: #0e9384; background: #d7f7f0; padding: 3px 10px; border-radius: 50px;
+    }
+
+    .highlight {
+      background: linear-gradient(135deg, rgba(109,94,246,0.08), rgba(155,93,229,0.08));
+      border: 1px solid rgba(109,94,246,0.22);
+      border-radius: 16px;
+      padding: 16px 18px;
+      margin: 16px 0 4px;
+    }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    td { padding: 10px 8px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 0.95rem; }
+    td:first-child { font-weight: 600; width: 42%; }
+
+    footer { text-align: center; color: var(--muted); font-size: 0.85rem; padding: 8px 20px 48px; }
+    footer a { color: var(--muted); }
+
+    .toc { display: flex; flex-wrap: wrap; gap: 8px; }
+    .toc a { font-size: 0.85rem; text-decoration: none; background: #eef0fb; color: #4a4ce8; padding: 6px 12px; border-radius: 50px; }
+    .toc a:hover { background: #e2e4fa; }
+
+    @media (max-width: 520px) {
+      .hero h1 { font-size: 1.7rem; }
+      .card { padding: 22px 20px; }
+      td:first-child { width: 100%; display: block; border: none; padding-bottom: 0; }
+      td { display: block; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="badge">🔒</div>
+    <h1>MyNotes+ Privacy Policy</h1>
+    <p>Private. Encrypted. Yours.</p>
+    <span class="updated">Last updated: 25 July 2026</span>
+  </header>
+
+  <main class="wrap">
+    <div class="card">
+      <p>
+        <strong>MyNotes+</strong> is an offline‑first, privacy‑first note‑taking app. It is built on a
+        simple principle: <strong>your notes belong to you and no one else — not even us.</strong>
+        This policy explains what data the app handles (spoiler: as little as possible) and how it is protected.
+      </p>
+      <div class="toc">
+        <a href="#collect">What we collect</a>
+        <a href="#storage">How notes are stored</a>
+        <a href="#permissions">Permissions</a>
+        <a href="#cloud">Optional cloud backup</a>
+        <a href="#tracking">No tracking</a>
+        <a href="#retention">Retention & deletion</a>
+        <a href="#security">Security</a>
+        <a href="#children">Children</a>
+        <a href="#changes">Changes</a>
+        <a href="#contact">Contact</a>
+      </div>
+    </div>
+
+    <div class="card" id="collect">
+      <h2><span class="dot"></span> Information we collect</h2>
+      <p><span class="pill">None by default</span></p>
+      <p>
+        MyNotes+ does <strong>not require an account, email, or login</strong>, and it does
+        <strong>not collect personal information</strong>. It contains no advertising SDKs and no
+        third‑party analytics or tracking libraries.
+      </p>
+      <ul>
+        <li>The content you create (notes, titles, checklists, colors, tags) is stored <strong>only on your device</strong>.</li>
+        <li>App settings (theme, toggles) are stored locally on your device and never transmitted.</li>
+        <li>We do not see, receive, or have access to your notes.</li>
+      </ul>
+    </div>
+
+    <div class="card" id="storage">
+      <h2><span class="dot"></span> How your notes are stored</h2>
+      <p>
+        Every note is serialized and encrypted with <strong>AES‑256‑GCM</strong> before it is written to
+        the on‑device database. The encryption key is generated and held in the
+        <strong>Android Keystore</strong> (hardware‑backed on supported devices) and is used to decrypt
+        content only in memory, only while the app is open.
+      </p>
+      <div class="highlight">
+        Plaintext of your notes is <strong>never written to disk</strong> and never leaves your device
+        unless you explicitly enable encrypted cloud backup (see below).
+      </div>
+    </div>
+
+    <div class="card" id="permissions">
+      <h2><span class="dot"></span> Permissions we use</h2>
+      <table>
+        <tr>
+          <td>Biometric (<code>USE_BIOMETRIC</code>)</td>
+          <td>Used only if you turn on <strong>App lock</strong>, to unlock the app with your fingerprint, face, or device screen lock. Biometric data is handled entirely by the Android system — the app never sees or stores it.</td>
+        </tr>
+      </table>
+      <p class="muted" style="margin-top:14px;">The app requests no location, contacts, microphone, or camera permissions for its core note features.</p>
+    </div>
+
+    <div class="card" id="cloud">
+      <h2><span class="dot"></span> Optional encrypted cloud backup</h2>
+      <p><span class="pill">Off by default</span></p>
+      <p>
+        Cloud backup is <strong>disabled by default</strong> and only ever runs if you deliberately turn
+        it on. When enabled, MyNotes+ is designed to upload <strong>only encrypted data (ciphertext)</strong>
+        to your chosen cloud storage. Your encryption keys <strong>never leave your device</strong>, so the
+        cloud provider — and the developer — cannot read your notes.
+      </p>
+      <p class="muted">
+        If you enable cloud backup, the third‑party storage provider’s own privacy policy also applies to
+        the encrypted blobs stored in your account.
+      </p>
+    </div>
+
+    <div class="card" id="tracking">
+      <h2><span class="dot"></span> No tracking, ads, or selling of data</h2>
+      <ul>
+        <li>We do <strong>not</strong> track you across apps or websites.</li>
+        <li>We do <strong>not</strong> show ads.</li>
+        <li>We do <strong>not</strong> sell, rent, or share your data with anyone.</li>
+        <li>We do <strong>not</strong> build advertising or user profiles.</li>
+      </ul>
+    </div>
+
+    <div class="card" id="retention">
+      <h2><span class="dot"></span> Data retention & deletion</h2>
+      <p>
+        Because your data lives on your device, <strong>you are in full control</strong>. You can delete any
+        note (it moves to Trash and can be permanently removed), and <strong>uninstalling the app removes all
+        of its local data</strong>. If you enabled cloud backup, delete the backup from your cloud storage
+        account to remove the encrypted copies there.
+      </p>
+    </div>
+
+    <div class="card" id="security">
+      <h2><span class="dot"></span> Security</h2>
+      <p>
+        We use industry‑standard protections including AES‑256‑GCM encryption, the Android Keystore, and an
+        optional biometric app lock. You can also enable “Hide in recent apps” to keep note previews out of
+        the app switcher. No method of storage is 100% infallible, but MyNotes+ is engineered so that your
+        content stays encrypted at rest and private to you.
+      </p>
+    </div>
+
+    <div class="card" id="children">
+      <h2><span class="dot"></span> Children’s privacy</h2>
+      <p>
+        MyNotes+ is a general‑purpose notes app and does not knowingly collect any personal information from
+        anyone, including children. Since no personal data is collected, no data about children is collected.
+      </p>
+    </div>
+
+    <div class="card" id="changes">
+      <h2><span class="dot"></span> Changes to this policy</h2>
+      <p>
+        We may update this Privacy Policy as the app evolves. Material changes will be reflected here with an
+        updated “Last updated” date. Continued use of the app after changes constitutes acceptance of the
+        revised policy.
+      </p>
+    </div>
+
+    <div class="card" id="contact">
+      <h2><span class="dot"></span> Contact</h2>
+      <p>
+        Questions about this policy or your privacy? Reach out at:
+        <br />
+        <!-- TODO: replace with your real contact email before publishing -->
+        <a href="mailto:your-email@example.com">your-email@example.com</a>
+      </p>
+    </div>
+  </main>
+
+  <footer>
+    <p>MyNotes+ &middot; Private. Encrypted. Yours.<br />&copy; 2026 MyNotes+. All rights reserved.</p>
+  </footer>
+</body>
+</html>
