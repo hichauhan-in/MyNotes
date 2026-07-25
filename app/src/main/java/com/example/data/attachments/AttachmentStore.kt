@@ -22,6 +22,10 @@ object AttachmentStore {
     fun newImageFile(context: Context): File =
         File(dir(context), "img_${System.currentTimeMillis()}_${UUID.randomUUID()}.jpg")
 
+    /** A fresh, empty destination file for a recorded voice note. */
+    fun newAudioFile(context: Context): File =
+        File(dir(context), "aud_${System.currentTimeMillis()}_${UUID.randomUUID()}.m4a")
+
     /** A content Uri (via FileProvider) that the camera app can write the capture to. */
     fun uriForFile(context: Context, file: File): Uri =
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)

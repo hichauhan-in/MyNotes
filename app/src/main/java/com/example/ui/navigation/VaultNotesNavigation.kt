@@ -22,13 +22,14 @@ import com.example.ui.settings.SettingsViewModel
 
 private object Routes {
     const val HOME = "home"
-    const val EDITOR = "editor?noteId={noteId}&template={template}"
+    const val EDITOR = "editor?noteId={noteId}&template={template}&folderId={folderId}"
     const val SETTINGS = "settings"
 
-    fun editor(noteId: String? = null, template: String? = null): String {
+    fun editor(noteId: String? = null, template: String? = null, folderId: String? = null): String {
         val params = buildList {
             if (noteId != null) add("noteId=$noteId")
             if (template != null) add("template=$template")
+            if (folderId != null) add("folderId=$folderId")
         }
         return if (params.isEmpty()) "editor" else "editor?" + params.joinToString("&")
     }
@@ -63,7 +64,9 @@ fun MyNotesNavigation() {
             HomeScreen(
                 viewModel = viewModel,
                 onNoteClick = { noteId -> navController.navigate(Routes.editor(noteId = noteId)) },
-                onCreateNote = { template -> navController.navigate(Routes.editor(template = template)) },
+                onCreateNote = { template, folderId ->
+                    navController.navigate(Routes.editor(template = template, folderId = folderId))
+                },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
             )
         }
@@ -77,15 +80,20 @@ fun MyNotesNavigation() {
                 navArgument("template") {
                     type = NavType.StringType; nullable = true; defaultValue = null
                 },
+                navArgument("folderId") {
+                    type = NavType.StringType; nullable = true; defaultValue = null
+                },
             ),
         ) { backStackEntry ->
             val noteId = backStackEntry.arguments?.getString("noteId")
             val template = backStackEntry.arguments?.getString("template")
+            val folderId = backStackEntry.arguments?.getString("folderId")
             val viewModel: EditorViewModel = viewModel()
             EditorScreen(
                 viewModel = viewModel,
                 noteId = noteId,
                 template = template,
+                folderId = folderId,
                 onNavigateBack = { navController.popBackStack() },
             )
         }

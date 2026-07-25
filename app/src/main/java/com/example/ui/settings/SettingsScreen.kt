@@ -163,7 +163,7 @@ fun SettingsScreen(
                 ToggleRow(
                     icon = Icons.Rounded.CloudUpload,
                     title = "Encrypted cloud sync",
-                    subtitle = "Back up to Google Drive — encrypted only",
+                    subtitle = "Back up to Google Drive - encrypted only",
                     checked = settings.cloudSyncEnabled,
                     onCheckedChange = viewModel::setCloudSyncEnabled,
                 )
@@ -172,7 +172,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(12.dp))
                         InfoBanner(
                             icon = Icons.Rounded.Shield,
-                            text = "Only encrypted blobs are uploaded. Your encryption keys never leave this device, so no one — not even us — can read your notes.",
+                            text = "Only encrypted blobs are uploaded. Your encryption keys never leave this device, so no one - not even us - can read your notes.",
                             tint = MaterialTheme.colorScheme.tertiary,
                         )
                     }
@@ -187,7 +187,7 @@ fun SettingsScreen(
                 SettingsLinkRow(
                     icon = Icons.Rounded.Person,
                     title = "About the developer",
-                    subtitle = "hichauhan.in",
+                    subtitle = "https://www.hichauhan.in/",
                     trailingIcon = Icons.Rounded.OpenInNew,
                     onClick = {
                         runCatching {
@@ -201,7 +201,7 @@ fun SettingsScreen(
                 SettingsLinkRow(
                     icon = Icons.Rounded.Info,
                     title = "Application Information",
-                    subtitle = "Version, licenses & credits",
+                    subtitle = "Understanding MyNotes+",
                     trailingLabel = "Soon",
                     onClick = { },
                 )

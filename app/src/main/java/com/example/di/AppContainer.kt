@@ -3,6 +3,7 @@ package com.example.di
 import android.content.Context
 import androidx.room.Room
 import com.example.data.local.AppDatabase
+import com.example.data.repository.FolderRepository
 import com.example.data.repository.NoteRepository
 import com.example.data.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +22,9 @@ object AppContainer {
     var noteRepository: NoteRepository? = null
         private set
 
+    var folderRepository: FolderRepository? = null
+        private set
+
     var settingsRepository: SettingsRepository? = null
         private set
 
@@ -32,11 +36,16 @@ object AppContainer {
                 "vault_notes_db"
             )
                 // Preserve notes across additive schema changes where possible.
-                .addMigrations(AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+                .addMigrations(
+                    AppDatabase.MIGRATION_2_3,
+                    AppDatabase.MIGRATION_3_4,
+                    AppDatabase.MIGRATION_4_5,
+                )
                 // Any other unknown schema jump: wipe & rebuild rather than crash.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
             noteRepository = NoteRepository(database!!.noteDao(), context.applicationContext)
+            folderRepository = FolderRepository(database!!.folderDao(), database!!.noteDao())
         }
         if (settingsRepository == null) {
             settingsRepository = SettingsRepository(context.applicationContext)

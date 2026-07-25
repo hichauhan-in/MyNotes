@@ -19,9 +19,15 @@ never touches storage, and no account or login is ever required.
 - **Premium, neumorphic UI** — a calm indigo→violet design system built on **Material 3**, with light / dark / system themes and optional **dynamic color**.
 - **Fast home dashboard** — staggered note grid with search and filter chips (All, Recent, Favorites, Pinned, Archived, Trash) plus a morphing “create” FAB.
 - **Multi‑select** — long‑press to select multiple notes and pin / favorite / archive / trash them in bulk. A per‑note `⋮` menu handles single‑note actions.
-- **Distraction‑free editor** — debounced auto‑save, a Markdown formatting toolbar, note color labels, and live word‑count / reading‑time stats.
+- **Distraction‑free editor** — debounced auto‑save, a Markdown formatting toolbar with **live styling** (bold / italic / headings render as you type), note color labels, and live word‑count / reading‑time stats.
+- **Rich blocks** — interactive **checklists**, **tables** (add / remove rows & columns, drag to resize), a list button (bullet / numbered / checklist) and a quote button (quotes / brackets / braces) that remember your last choice, all interleaved inline with text and media.
+- **Sheets** — a full-note spreadsheet with editable cells and **drag-resizable rows and columns**.
+- **Expenses** — a private budgeting dashboard: log income and where it goes (expenses / savings / investments) with a live allocation bar, plus your account balances.
 - **Checklists** — turn a note into an interactive, checkable to‑do list with live progress.
-- **Image attachments** — insert photos from the **gallery** or capture live with the **camera**, placed **inline at your cursor** so text and images can be interleaved freely. Each note keeps its own private, on‑device copy (removed with the note); captures never leave the app unless you export them.
+- **Image attachments** — insert photos from the **gallery** or capture live with the **camera**, placed **inline at your cursor** so text and images can be interleaved freely. Drag a corner to **resize** an image. Each note keeps its own private, on‑device copy (removed with the note); captures never leave the app unless you export them.
+- **Voice notes** — record audio straight into a note and play it back inline. Recordings are stored privately on‑device and deleted with the note.
+- **Books** — organise notes into nestable folders ("books"). Create a book from the + menu, open it to browse or add notes inside, and move single or multiple notes between books.
+- **Tags** — label notes and search any tag to pull up every note that carries it.
 - **Reusable templates** — build your own note templates with custom icons and manage them in a tabbed New / Manage sheet.
 - **App lock** — optional unlock with **fingerprint, face, or device PIN** (biometric / device‑credential).
 - **Organization** — pin, favorite, archive, color labels, and a recoverable Trash.

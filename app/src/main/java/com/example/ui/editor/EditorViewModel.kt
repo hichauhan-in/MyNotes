@@ -30,6 +30,8 @@ data class EditorUiState(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
     val attachments: List<String> = emptyList(),
+    val tags: List<String> = emptyList(),
+    val folderId: String? = null,
     val saveStatus: SaveStatus = SaveStatus.Idle,
 ) {
     val wordCount: Int
@@ -46,7 +48,8 @@ data class EditorUiState(
     val speakingMinutes: Int
         get() = if (wordCount == 0) 0 else max(1, (wordCount / 130.0).roundToInt())
 
-    val hasContent: Boolean get() = title.isNotBlank() || content.isNotBlank() || attachments.isNotEmpty()
+    val hasContent: Boolean get() = title.isNotBlank() || content.isNotBlank() ||
+        attachments.isNotEmpty() || tags.isNotEmpty()
 }
 
 class EditorViewModel : ViewModel() {
@@ -64,7 +67,7 @@ class EditorViewModel : ViewModel() {
     /** True only once the user has actually changed something in this session. */
     private var dirty = false
 
-    fun load(id: String?, template: String?) {
+    fun load(id: String?, template: String?, folderId: String? = null) {
         if (loaded) return
         loaded = true
         if (id.isNullOrBlank()) {
@@ -73,13 +76,13 @@ class EditorViewModel : ViewModel() {
                 viewModelScope.launch {
                     val t = settings.customTemplates.first().find { it.id == templateId }
                     _state.value = if (t != null) {
-                        EditorUiState(title = t.name, content = t.content)
+                        EditorUiState(title = t.name, content = t.content, folderId = folderId)
                     } else {
-                        EditorUiState()
+                        EditorUiState(folderId = folderId)
                     }
                 }
             } else {
-                _state.value = seedFor(template)
+                _state.value = seedFor(template).copy(folderId = folderId)
             }
             return
         }
@@ -98,6 +101,8 @@ class EditorViewModel : ViewModel() {
                     createdAt = note.createdAt,
                     updatedAt = note.updatedAt,
                     attachments = note.attachments,
+                    tags = note.tags,
+                    folderId = note.folderId,
                     saveStatus = SaveStatus.Saved,
                 )
             }
@@ -149,6 +154,21 @@ class EditorViewModel : ViewModel() {
         persistNow()
     }
 
+    fun addTag(tag: String) {
+        val clean = tag.trim().removePrefix("#").trim()
+        if (clean.isEmpty()) return
+        if (_state.value.tags.any { it.equals(clean, ignoreCase = true) }) return
+        dirty = true
+        _state.value = _state.value.copy(tags = _state.value.tags + clean)
+        persistNow()
+    }
+
+    fun removeTag(tag: String) {
+        dirty = true
+        _state.value = _state.value.copy(tags = _state.value.tags - tag)
+        persistNow()
+    }
+
     private fun scheduleAutoSave() {
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
@@ -184,6 +204,8 @@ class EditorViewModel : ViewModel() {
                     isFavorite = snapshot.isFavorite,
                     colorArgb = snapshot.colorArgb,
                     attachments = snapshot.attachments,
+                    tags = snapshot.tags,
+                    folderId = snapshot.folderId,
                 )
             )
             persisted = true
@@ -205,6 +227,18 @@ class EditorViewModel : ViewModel() {
             title = "Checklist",
             type = NoteType.CHECKLIST,
             content = "[ ] \n[ ] \n[ ] ",
+        )
+
+        "sheet" -> EditorUiState(
+            title = "Sheet",
+            type = NoteType.SHEET,
+            content = "",
+        )
+
+        "expense" -> EditorUiState(
+            title = "Expenses",
+            type = NoteType.EXPENSE,
+            content = "",
         )
 
         "meeting" -> EditorUiState(

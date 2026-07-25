@@ -1,11 +1,11 @@
 package com.example.domain.model
 
-/** A note is either free-form text or an interactive checklist. */
-enum class NoteType { TEXT, CHECKLIST }
+/** The kind of note: free text, an interactive checklist, a spreadsheet, or an expense tracker. */
+enum class NoteType { TEXT, CHECKLIST, SHEET, EXPENSE }
 
 /**
  * Decrypted, in-memory representation of a note. Instances of this class only ever
- * exist in RAM — everything written to disk is encrypted (see NoteEntity).
+ * exist in RAM - everything written to disk is encrypted (see NoteEntity).
  */
 data class Note(
     val id: String,
@@ -25,14 +25,17 @@ data class Note(
     val attachments: List<String> = emptyList(),
 ) {
     val isChecklist: Boolean get() = type == NoteType.CHECKLIST
+    val isSheet: Boolean get() = type == NoteType.SHEET
+    val isExpense: Boolean get() = type == NoteType.EXPENSE
 
     val preview: String
-        get() = if (isChecklist) {
-            Checklist.parse(content).joinToString("   ") {
+        get() = when {
+            isChecklist -> Checklist.parse(content).joinToString("   ") {
                 (if (it.checked) "✓ " else "○ ") + it.text
             }.trim()
-        } else {
-            AttachmentMarkup.stripTokens(content).trim().replace(Regex("\\s+"), " ")
+            isSheet -> "Spreadsheet"
+            isExpense -> "Expense tracker"
+            else -> AttachmentMarkup.stripTokens(content).trim().replace(Regex("\\s+"), " ")
         }
 
     val wordCount: Int
@@ -48,4 +51,5 @@ data class Folder(
     val id: String,
     val name: String,
     val colorArgb: Int = 0,
+    val parentId: String? = null,
 )

@@ -1,21 +1,32 @@
 package com.example.ui.editor
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import android.util.Base64
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -40,23 +51,35 @@ import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DragIndicator
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FormatBold
+import androidx.compose.material.icons.rounded.FormatColorFill
 import androidx.compose.material.icons.rounded.FormatItalic
 import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatQuote
 import androidx.compose.material.icons.rounded.HorizontalRule
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Sell
+import androidx.compose.material.icons.rounded.StrikethroughS
+import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material.icons.rounded.Title
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -66,6 +89,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
@@ -76,17 +100,28 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import com.example.data.attachments.AttachmentStore
+import com.example.domain.model.AttachmentKind
 import com.example.domain.model.AttachmentMarkup
 import com.example.domain.model.Checklist as ChecklistUtil
 import com.example.domain.model.ChecklistItem
@@ -97,23 +132,31 @@ import com.example.ui.theme.NoteAccents
 import com.example.ui.theme.neumorphicRaised
 import java.io.File
 import java.util.UUID
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Composable
 fun EditorScreen(
     viewModel: EditorViewModel,
     noteId: String?,
     template: String? = null,
+    folderId: String? = null,
     onNavigateBack: () -> Unit,
 ) {
-    LaunchedEffect(Unit) { viewModel.load(noteId, template) }
+    LaunchedEffect(Unit) { viewModel.load(noteId, template, folderId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
     var showColorSheet by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
+    var showVoiceRecorder by remember { mutableStateOf(false) }
+    var showMicRationale by remember { mutableStateOf(false) }
+    var showTagSheet by remember { mutableStateOf(false) }
+    var showTableDialog by remember { mutableStateOf(false) }
     val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
     val blocks = remember { mutableStateListOf<EditorBlock>() }
     var focusedBlockId by remember { mutableStateOf<String?>(null) }
@@ -146,7 +189,8 @@ fun EditorScreen(
         }
     }
 
-    fun insertImageAtCursor(fileName: String) {
+    // Insert a media block (image / audio) at the cursor, splitting the focused text block.
+    fun insertBlockAtCursor(media: EditorBlock) {
         val idx = blocks.indexOfFirst { it.id == focusedBlockId }
         if (idx >= 0 && blocks[idx] is TextBlock) {
             val tb = blocks[idx] as TextBlock
@@ -154,21 +198,37 @@ fun EditorScreen(
             val before = tb.value.text.substring(0, cursor)
             val after = tb.value.text.substring(cursor)
             blocks[idx] = TextBlock(tb.id, TextFieldValue(before, TextRange(before.length)))
-            blocks.add(idx + 1, ImageBlock(newBlockId(), fileName))
+            blocks.add(idx + 1, media)
             blocks.add(idx + 2, TextBlock(newBlockId(), TextFieldValue(after)))
         } else {
-            blocks.add(ImageBlock(newBlockId(), fileName))
+            blocks.add(media)
             blocks.add(TextBlock(newBlockId(), TextFieldValue("")))
         }
         pushBlocks(immediate = true)
     }
 
-    fun removeImageBlock(blockId: String) {
+    fun insertImageAtCursor(fileName: String) = insertBlockAtCursor(ImageBlock(newBlockId(), fileName))
+
+    fun insertAudioAtCursor(fileName: String) = insertBlockAtCursor(AudioBlock(newBlockId(), fileName))
+
+    fun resizeImageBlock(blockId: String, widthPercent: Int) {
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && blocks[idx] is ImageBlock) {
+            blocks[idx] = (blocks[idx] as ImageBlock).copy(widthPercent = widthPercent)
+            pushBlocks(immediate = true)
+        }
+    }
+
+    fun removeBlock(blockId: String) {
         val idx = blocks.indexOfFirst { it.id == blockId }
         if (idx < 0) return
-        val fileName = (blocks[idx] as? ImageBlock)?.fileName
+        val fileName = when (val b = blocks[idx]) {
+            is ImageBlock -> b.fileName
+            is AudioBlock -> b.fileName
+            else -> null
+        }
         blocks.removeAt(idx)
-        // Merge the text blocks that surrounded the image so the cursor flows naturally.
+        // Merge the text blocks that surrounded the media so the cursor flows naturally.
         if (idx - 1 >= 0 && idx < blocks.size && blocks[idx - 1] is TextBlock && blocks[idx] is TextBlock) {
             val a = blocks[idx - 1] as TextBlock
             val b = blocks[idx] as TextBlock
@@ -182,6 +242,40 @@ fun EditorScreen(
         }
         fileName?.let { AttachmentStore.delete(context, it) }
         pushBlocks(immediate = true)
+    }
+
+    fun insertChecklistBlock() =
+        insertBlockAtCursor(ChecklistBlock(newBlockId(), listOf(ChecklistEntry(newBlockId(), "", false))))
+
+    fun updateChecklistBlock(blockId: String, items: List<ChecklistEntry>) {
+        if (items.isEmpty()) {
+            removeBlock(blockId)
+            return
+        }
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && blocks[idx] is ChecklistBlock) {
+            blocks[idx] = ChecklistBlock(blockId, items)
+            pushBlocks(immediate = false)
+        }
+    }
+
+    fun updateTableBlock(blockId: String, newBlock: TableBlock, immediate: Boolean) {
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && blocks[idx] is TableBlock) {
+            blocks[idx] = newBlock
+            pushBlocks(immediate = immediate)
+        }
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) showVoiceRecorder = true else showMicRationale = true }
+
+    fun startVoiceNote() {
+        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (granted) showVoiceRecorder = true
+        else audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -262,6 +356,26 @@ fun EditorScreen(
             },
         )
 
+        when (state.type) {
+            NoteType.SHEET -> SheetEditor(
+                seedKey = state.id,
+                title = state.title,
+                content = state.content,
+                onTitleChange = viewModel::onTitleChanged,
+                onContentChange = viewModel::onContentChanged,
+                modifier = Modifier.weight(1f),
+            )
+
+            NoteType.EXPENSE -> ExpenseEditor(
+                seedKey = state.id,
+                title = state.title,
+                content = state.content,
+                onTitleChange = viewModel::onTitleChanged,
+                onContentChange = viewModel::onContentChanged,
+                modifier = Modifier.weight(1f),
+            )
+
+            else -> {
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -307,6 +421,9 @@ fun EditorScreen(
                 )
             }
 
+            Spacer(Modifier.height(12.dp))
+            TagRow(tags = state.tags, onEdit = { showTagSheet = true })
+
             Spacer(Modifier.height(16.dp))
             if (state.type == NoteType.CHECKLIST) {
                 ChecklistBody(
@@ -326,9 +443,38 @@ fun EditorScreen(
                             )
 
                             is ImageBlock -> {
-                                AttachmentImage(
+                                ResizableAttachmentImage(
                                     file = AttachmentStore.fileFor(context, block.fileName),
-                                    onRemove = { removeImageBlock(block.id) },
+                                    widthFraction = (block.widthPercent ?: 100) / 100f,
+                                    onWidthChange = { pct -> resizeImageBlock(block.id, pct) },
+                                    onRemove = { removeBlock(block.id) },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
+
+                            is AudioBlock -> {
+                                AudioAttachment(
+                                    file = AttachmentStore.fileFor(context, block.fileName),
+                                    onRemove = { removeBlock(block.id) },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
+
+                            is ChecklistBlock -> {
+                                ChecklistBlockView(
+                                    block = block,
+                                    onChange = { items -> updateChecklistBlock(block.id, items) },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
+
+                            is TableBlock -> {
+                                TableBlockView(
+                                    block = block,
+                                    onChange = { updated, immediate ->
+                                        updateTableBlock(block.id, updated, immediate)
+                                    },
+                                    onRemove = { removeBlock(block.id) },
                                 )
                                 Spacer(Modifier.height(12.dp))
                             }
@@ -342,16 +488,18 @@ fun EditorScreen(
         if (state.type != NoteType.CHECKLIST) {
             FormattingToolbar(
                 onImage = { showImagePicker = true },
+                onVoice = { startVoiceNote() },
                 onHeader = { editFocusedBlock { prefixLine(it, "# ") } },
-                onBold = { editFocusedBlock { wrapSelection(it, "**") } },
-                onItalic = { editFocusedBlock { wrapSelection(it, "*") } },
-                onChecklist = { editFocusedBlock { prefixLine(it, "- [ ] ") } },
+                onFormat = { token -> editFocusedBlock { wrapSelection(it, token) } },
                 onBullet = { editFocusedBlock { prefixLine(it, "- ") } },
                 onNumbered = { editFocusedBlock { prefixLine(it, "1. ") } },
-                onQuote = { editFocusedBlock { surround(it, "\"", "\"") } },
-                onCode = { editFocusedBlock { surround(it, "[", "]") } },
-                onDivider = { editFocusedBlock { insert(it, "\n\n---\n\n") } },
+                onChecklist = { insertChecklistBlock() },
+                onWrap = { open, close -> editFocusedBlock { surround(it, open, close) } },
+                onDivider = { editFocusedBlock { insert(it, "\n\n--------------------\n\n") } },
+                onTable = { showTableDialog = true },
             )
+        }
+        }
         }
     }
 
@@ -385,6 +533,52 @@ fun EditorScreen(
                     }
             },
             onDismiss = { showImagePicker = false },
+        )
+    }
+
+    if (showVoiceRecorder) {
+        VoiceRecorderSheet(
+            onSave = { fileName ->
+                insertAudioAtCursor(fileName)
+                showVoiceRecorder = false
+            },
+            onCancel = { showVoiceRecorder = false },
+        )
+    }
+
+    if (showMicRationale) {
+        MicPermissionDialog(
+            onOpenSettings = {
+                showMicRationale = false
+                runCatching {
+                    context.startActivity(
+                        Intent(
+                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            Uri.fromParts("package", context.packageName, null),
+                        ),
+                    )
+                }
+            },
+            onDismiss = { showMicRationale = false },
+        )
+    }
+
+    if (showTagSheet) {
+        TagEditorSheet(
+            tags = state.tags,
+            onAdd = { viewModel.addTag(it) },
+            onRemove = { viewModel.removeTag(it) },
+            onDismiss = { showTagSheet = false },
+        )
+    }
+
+    if (showTableDialog) {
+        TableSizeDialog(
+            onCreate = { rows, cols ->
+                insertBlockAtCursor(emptyTable(rows, cols))
+                showTableDialog = false
+            },
+            onDismiss = { showTableDialog = false },
         )
     }
 }
@@ -491,20 +685,55 @@ private fun EditorMeta(words: Int, readingMinutes: Int) {
     )
 }
 
+private enum class ListStyle(val icon: ImageVector, val label: String) {
+    BULLET(Icons.AutoMirrored.Rounded.FormatListBulleted, "Bullet list"),
+    NUMBERED(Icons.Rounded.FormatListNumbered, "Numbered list"),
+    CHECKLIST(Icons.Rounded.Checklist, "Checklist"),
+}
+
+private enum class FormatStyle(val icon: ImageVector, val label: String, val token: String) {
+    BOLD(Icons.Rounded.FormatBold, "Bold", "**"),
+    ITALIC(Icons.Rounded.FormatItalic, "Italic", "*"),
+    STRIKETHROUGH(Icons.Rounded.StrikethroughS, "Strikethrough", "~~"),
+    HIGHLIGHT(Icons.Rounded.FormatColorFill, "Highlight", "=="),
+}
+
+private data class WrapStyle(val glyph: String, val label: String, val open: String, val close: String)
+
+private val wrapStyles = listOf(
+    WrapStyle("\"", "Double quotes", "\"", "\""),
+    WrapStyle("'", "Single quotes", "'", "'"),
+    WrapStyle("(", "Parentheses", "(", ")"),
+    WrapStyle("[", "Brackets", "[", "]"),
+    WrapStyle("{", "Braces", "{", "}"),
+    WrapStyle("`", "Code", "`", "`"),
+)
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FormattingToolbar(
     onImage: () -> Unit,
+    onVoice: () -> Unit,
     onHeader: () -> Unit,
-    onBold: () -> Unit,
-    onItalic: () -> Unit,
-    onChecklist: () -> Unit,
+    onFormat: (token: String) -> Unit,
     onBullet: () -> Unit,
     onNumbered: () -> Unit,
-    onQuote: () -> Unit,
-    onCode: () -> Unit,
+    onChecklist: () -> Unit,
+    onWrap: (open: String, close: String) -> Unit,
     onDivider: () -> Unit,
+    onTable: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
+    var listStyle by remember { mutableStateOf(ListStyle.BULLET) }
+    var formatStyle by remember { mutableStateOf(FormatStyle.BOLD) }
+    var wrapIndex by remember { mutableStateOf(0) }
+
+    fun applyList(style: ListStyle) = when (style) {
+        ListStyle.BULLET -> onBullet()
+        ListStyle.NUMBERED -> onNumbered()
+        ListStyle.CHECKLIST -> onChecklist()
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -519,30 +748,133 @@ private fun FormattingToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        ToolbarImageButton(onImage)
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 4.dp)
-                .height(26.dp)
-                .width(1.dp)
-                .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
-        )
+        ToolbarAccentButton(Icons.Rounded.AddPhotoAlternate, "Add image", onImage)
+        Spacer(Modifier.width(6.dp))
+        ToolbarAccentButton(Icons.Rounded.Mic, "Record voice note", onVoice)
+        ToolbarDivider()
         ToolbarButton(Icons.Rounded.Title, "Heading", onHeader)
-        ToolbarButton(Icons.Rounded.FormatBold, "Bold", onBold)
-        ToolbarButton(Icons.Rounded.FormatItalic, "Italic", onItalic)
-        ToolbarButton(Icons.Rounded.Checklist, "Checklist", onChecklist)
-        ToolbarButton(Icons.AutoMirrored.Rounded.FormatListBulleted, "Bullet list", onBullet)
-        ToolbarButton(Icons.Rounded.FormatListNumbered, "Numbered list", onNumbered)
-        ToolbarButton(Icons.Rounded.FormatQuote, "Quotes", onQuote)
-        ToolbarButton(Icons.Rounded.Code, "Brackets", onCode)
+        ToolbarMenuButton(
+            description = formatStyle.label,
+            onClick = { onFormat(formatStyle.token) },
+            icon = formatStyle.icon,
+        ) { dismiss ->
+            FormatStyle.entries.forEach { style ->
+                DropdownMenuItem(
+                    text = { Text(style.label) },
+                    leadingIcon = { Icon(style.icon, contentDescription = null) },
+                    onClick = {
+                        formatStyle = style
+                        dismiss()
+                        onFormat(style.token)
+                    },
+                )
+            }
+        }
+        ToolbarMenuButton(
+            description = listStyle.label,
+            onClick = { applyList(listStyle) },
+            icon = listStyle.icon,
+        ) { dismiss ->
+            ListStyle.entries.forEach { style ->
+                DropdownMenuItem(
+                    text = { Text(style.label) },
+                    leadingIcon = { Icon(style.icon, contentDescription = null) },
+                    onClick = {
+                        listStyle = style
+                        dismiss()
+                        applyList(style)
+                    },
+                )
+            }
+        }
+        val wrap = wrapStyles[wrapIndex]
+        ToolbarMenuButton(
+            description = wrap.label,
+            onClick = { onWrap(wrap.open, wrap.close) },
+            glyph = wrap.glyph,
+        ) { dismiss ->
+            wrapStyles.forEachIndexed { i, style ->
+                DropdownMenuItem(
+                    text = { Text("${style.label}   ${style.open}${style.close}") },
+                    onClick = {
+                        wrapIndex = i
+                        dismiss()
+                        onWrap(style.open, style.close)
+                    },
+                )
+            }
+        }
         ToolbarButton(Icons.Rounded.HorizontalRule, "Divider", onDivider)
+        ToolbarButton(Icons.Rounded.TableChart, "Table", onTable)
     }
 }
 
-/** The image button is deliberately styled differently — a raised, tinted tile — so
- *  adding an image reads as the primary action in the toolbar. */
 @Composable
-private fun ToolbarImageButton(onClick: () -> Unit) {
+private fun ToolbarDivider() {
+    Box(
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .height(26.dp)
+            .width(1.dp)
+            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
+    )
+}
+
+/** A toolbar button that applies its current style on tap and opens a chooser on long-press.
+ *  The chosen style becomes the new default reflected on the button. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ToolbarMenuButton(
+    description: String,
+    onClick: () -> Unit,
+    icon: ImageVector? = null,
+    glyph: String? = null,
+    menu: @Composable (dismiss: () -> Unit) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick,
+                    onLongClick = { expanded = true },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (icon != null) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = description,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp),
+                )
+            } else {
+                Text(
+                    text = glyph ?: "",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            menu { expanded = false }
+        }
+    }
+}
+
+/** The image / voice buttons are deliberately styled differently - raised, tinted tiles -
+ *  so adding media reads as a primary action in the toolbar. */
+@Composable
+private fun ToolbarAccentButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+) {
     val neu = LocalNeuColors.current
     Box(
         modifier = Modifier
@@ -558,8 +890,8 @@ private fun ToolbarImageButton(onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            imageVector = Icons.Rounded.AddPhotoAlternate,
-            contentDescription = "Add image",
+            imageVector = icon,
+            contentDescription = description,
             tint = MaterialTheme.colorScheme.onPrimary,
             modifier = Modifier.size(22.dp),
         )
@@ -665,8 +997,217 @@ private fun ColorSwatch(
     }
 }
 
-// ---- Inline editor blocks (text + images) -------------------------------------
+@Composable
+private fun MicPermissionDialog(
+    onOpenSettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.Mic,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        title = { Text("Microphone access needed") },
+        text = {
+            Text(
+                "To record a voice note, MyNotes+ needs permission to use the microphone. " +
+                    "Allow it from the system prompt, or enable it in Settings if you previously declined.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onOpenSettings) { Text("Open settings") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Not now") }
+        },
+    )
+}
 
+// ---- Tags ----------------------------------------------------------------------
+
+@Composable
+private fun TagRow(tags: List<String>, onEdit: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        tags.forEach { tag ->
+            Text(
+                text = "#$tag",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .clickable(onClick = onEdit)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
+                .clickable(onClick = onEdit)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Sell,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Add tag",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TagEditorSheet(
+    tags: List<String>,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val neu = LocalNeuColors.current
+    val sheetState = rememberModalBottomSheetState()
+    var input by remember { mutableStateOf("") }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+                .imePadding(),
+        ) {
+            Text(
+                text = "Tags",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Add tags to group notes. Search a tag on the home screen to find them all.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .neumorphicRaised(16.dp, neu, elevation = 5.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(14.dp),
+                ) {
+                    if (input.isEmpty()) {
+                        Text(
+                            text = "New tag",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                    BasicTextField(
+                        value = input,
+                        onValueChange = { input = it.replace("\n", "") },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .clickable {
+                            if (input.isNotBlank()) {
+                                onAdd(input)
+                                input = ""
+                            }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = "Add tag",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
+            if (tags.isNotEmpty()) {
+                Spacer(Modifier.height(18.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    tags.forEach { tag ->
+                        RemovableTagChip(text = "#$tag") { onRemove(tag) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RemovableTagChip(text: String, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.secondaryContainer)
+            .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+        )
+        Spacer(Modifier.width(6.dp))
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Close,
+                contentDescription = "Remove tag",
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(14.dp),
+            )
+        }
+    }
+}
+
+// ---- Inline editor blocks (text + images) -------------------------------------
 @Composable
 private fun EditorTextBlock(
     value: TextFieldValue,
@@ -675,6 +1216,11 @@ private fun EditorTextBlock(
     onValueChange: (TextFieldValue) -> Unit,
     onFocused: () -> Unit,
 ) {
+    val markerColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+    val highlightColor = MaterialTheme.colorScheme.tertiaryContainer
+    val transformation = remember(markerColor, highlightColor) {
+        markdownVisualTransformation(markerColor, highlightColor)
+    }
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
@@ -682,6 +1228,7 @@ private fun EditorTextBlock(
             color = MaterialTheme.colorScheme.onBackground,
         ),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        visualTransformation = transformation,
         decorationBox = { inner ->
             if (showHint) {
                 Text(
@@ -699,34 +1246,118 @@ private fun EditorTextBlock(
     )
 }
 
-@Composable
-private fun AttachmentImage(file: File, onRemove: () -> Unit) {
-    Box(modifier = Modifier.fillMaxWidth()) {
-        AsyncImage(
-            model = file,
-            contentDescription = "Attached image",
-            contentScale = ContentScale.FillWidth,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 420.dp)
-                .clip(RoundedCornerShape(16.dp)),
-        )
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(10.dp)
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
-                .clickable(onClick = onRemove),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Close,
-                contentDescription = "Remove image",
-                tint = Color.White,
-                modifier = Modifier.size(18.dp),
+/**
+ * Renders markdown inline while keeping the raw text 1:1 (identity offset mapping, so the
+ * cursor stays correct): **bold**, *italic* and `# heading` lines get real styling, and the
+ * syntax markers are dimmed rather than hidden.
+ */
+private fun markdownVisualTransformation(markerColor: Color, highlightColor: Color): VisualTransformation =
+    VisualTransformation { text ->
+        val raw = text.text
+        val builder = AnnotatedString.Builder(raw)
+        Regex("^(#{1,6})\\s.*$", RegexOption.MULTILINE).findAll(raw).forEach { m ->
+            val level = m.groupValues[1].length
+            val size = (24 - (level - 1) * 2).coerceAtLeast(15).sp
+            builder.addStyle(
+                SpanStyle(fontWeight = FontWeight.Bold, fontSize = size),
+                m.range.first,
+                m.range.last + 1,
             )
+            builder.addStyle(
+                SpanStyle(color = markerColor),
+                m.range.first,
+                (m.range.first + level + 1).coerceAtMost(raw.length),
+            )
+        }
+        Regex("\\*\\*(.+?)\\*\\*").findAll(raw).forEach { m ->
+            builder.addStyle(SpanStyle(fontWeight = FontWeight.Bold), m.range.first, m.range.last + 1)
+            builder.addStyle(SpanStyle(color = markerColor, fontWeight = FontWeight.Normal), m.range.first, m.range.first + 2)
+            builder.addStyle(SpanStyle(color = markerColor, fontWeight = FontWeight.Normal), m.range.last - 1, m.range.last + 1)
+        }
+        Regex("(?<![*\\w])\\*(?!\\s)([^*\\n]+?)\\*(?![*\\w])").findAll(raw).forEach { m ->
+            builder.addStyle(SpanStyle(fontStyle = FontStyle.Italic), m.range.first, m.range.last + 1)
+            builder.addStyle(SpanStyle(color = markerColor), m.range.first, m.range.first + 1)
+            builder.addStyle(SpanStyle(color = markerColor), m.range.last, m.range.last + 1)
+        }
+        Regex("~~(.+?)~~").findAll(raw).forEach { m ->
+            builder.addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), m.range.first, m.range.last + 1)
+            builder.addStyle(SpanStyle(color = markerColor), m.range.first, m.range.first + 2)
+            builder.addStyle(SpanStyle(color = markerColor), m.range.last - 1, m.range.last + 1)
+        }
+        Regex("==(.+?)==").findAll(raw).forEach { m ->
+            builder.addStyle(SpanStyle(background = highlightColor), m.range.first, m.range.last + 1)
+            builder.addStyle(SpanStyle(color = markerColor), m.range.first, m.range.first + 2)
+            builder.addStyle(SpanStyle(color = markerColor), m.range.last - 1, m.range.last + 1)
+        }
+        TransformedText(builder.toAnnotatedString(), OffsetMapping.Identity)
+    }
+
+@Composable
+private fun ResizableAttachmentImage(
+    file: File,
+    widthFraction: Float,
+    onWidthChange: (Int) -> Unit,
+    onRemove: () -> Unit,
+) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val maxWidthPx = with(LocalDensity.current) { maxWidth.toPx() }
+        var fraction by remember(widthFraction) { mutableStateOf(widthFraction) }
+
+        Box(modifier = Modifier.fillMaxWidth(fraction.coerceIn(0.3f, 1f))) {
+            AsyncImage(
+                model = file,
+                contentDescription = "Attached image",
+                contentScale = ContentScale.FillWidth,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .clip(RoundedCornerShape(16.dp)),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(10.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Remove image",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+            // Drag this corner handle to scale the image down (or back up).
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(10.dp)
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
+                    .pointerInput(maxWidthPx) {
+                        detectDragGestures(
+                            onDrag = { change, drag ->
+                                change.consume()
+                                if (maxWidthPx > 0f) {
+                                    fraction = (fraction + drag.x / maxWidthPx).coerceIn(0.3f, 1f)
+                                }
+                            },
+                            onDragEnd = { onWidthChange((fraction * 100).roundToInt()) },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.OpenInFull,
+                    contentDescription = "Resize image",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
     }
 }
@@ -945,6 +1576,253 @@ private fun ChecklistRow(
     }
 }
 
+// ---- Inline checklist & table blocks ------------------------------------------
+
+@Composable
+private fun ChecklistBlockView(
+    block: ChecklistBlock,
+    onChange: (List<ChecklistEntry>) -> Unit,
+) {
+    val neu = LocalNeuColors.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neumorphicRaised(16.dp, neu, elevation = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+    ) {
+        block.items.forEach { item ->
+            key(item.id) {
+                ChecklistRow(
+                    item = UiChecklistItem(item.id, item.text, item.checked),
+                    onToggle = {
+                        onChange(block.items.map { if (it.id == item.id) it.copy(checked = !it.checked) else it })
+                    },
+                    onTextChange = { text ->
+                        onChange(block.items.map { if (it.id == item.id) it.copy(text = text) else it })
+                    },
+                    onDelete = {
+                        onChange(block.items.filterNot { it.id == item.id })
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { onChange(block.items + ChecklistEntry(newBlockId(), "", false)) }
+                .padding(vertical = 6.dp, horizontal = 4.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Add,
+                contentDescription = "Add item",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "Add item",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TableBlockView(
+    block: TableBlock,
+    onChange: (TableBlock, Boolean) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val neu = LocalNeuColors.current
+    val density = LocalDensity.current
+    val current by rememberUpdatedState(block)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.TableChart,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.weight(1f))
+            TableCtrl(Icons.Rounded.Remove, "Remove column") { onChange(current.removeColumn(), true) }
+            TableCtrl(Icons.Rounded.Add, "Add column") { onChange(current.addColumn(), true) }
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 4.dp)
+                    .height(20.dp)
+                    .width(1.dp)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
+            )
+            TableCtrl(Icons.Rounded.Remove, "Remove row") { onChange(current.removeRow(), true) }
+            TableCtrl(Icons.Rounded.Add, "Add row") { onChange(current.addRow(), true) }
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Remove table",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Column(
+            modifier = Modifier
+                .horizontalScroll(rememberScrollState())
+                .neumorphicRaised(12.dp, neu, elevation = 4.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surface),
+        ) {
+            block.cells.forEachIndexed { r, row ->
+                Row {
+                    row.forEachIndexed { c, cell ->
+                        val w = block.columnWidths.getOrElse(c) { 130 }
+                        Box(
+                            modifier = Modifier
+                                .width(w.dp)
+                                .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                                .padding(8.dp),
+                        ) {
+                            BasicTextField(
+                                value = cell,
+                                onValueChange = { onChange(current.setCell(r, c, it), false) },
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth()) {
+                block.columnWidths.forEachIndexed { c, w ->
+                    Box(
+                        modifier = Modifier
+                            .width(w.dp)
+                            .height(16.dp),
+                        contentAlignment = Alignment.CenterEnd,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .width(26.dp)
+                                .pointerInput(c) {
+                                    var startW = 0
+                                    var acc = 0f
+                                    detectDragGestures(
+                                        onDragStart = {
+                                            startW = current.columnWidths.getOrElse(c) { 130 }
+                                            acc = 0f
+                                        },
+                                        onDrag = { change, drag ->
+                                            change.consume()
+                                            acc += drag.x
+                                            val deltaDp = with(density) { acc.toDp().value }.toInt()
+                                            onChange(current.setColumnWidth(c, (startW + deltaDp).coerceIn(60, 320)), false)
+                                        },
+                                        onDragEnd = { onChange(current, true) },
+                                    )
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.DragIndicator,
+                                contentDescription = "Resize column",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.size(14.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TableCtrl(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun TableSizeDialog(
+    onCreate: (rows: Int, cols: Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var rows by remember { mutableStateOf(3) }
+    var cols by remember { mutableStateOf(3) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.TableChart,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        title = { Text("Insert table") },
+        text = {
+            Column {
+                TableStepper("Rows", rows, 1, 20) { rows = it }
+                Spacer(Modifier.height(12.dp))
+                TableStepper("Columns", cols, 1, 8) { cols = it }
+            }
+        },
+        confirmButton = { TextButton(onClick = { onCreate(rows, cols) }) { Text("Insert") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun TableStepper(label: String, value: Int, min: Int, max: Int, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f),
+        )
+        TableCtrl(Icons.Rounded.Remove, "Decrease") { onChange((value - 1).coerceAtLeast(min)) }
+        Box(modifier = Modifier.width(36.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text = "$value",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        TableCtrl(Icons.Rounded.Add, "Increase") { onChange((value + 1).coerceAtMost(max)) }
+    }
+}
+
 // ---- Markdown insertion helpers -----------------------------------------------
 
 private fun wrapSelection(value: TextFieldValue, token: String): TextFieldValue {
@@ -995,27 +1873,80 @@ private sealed interface EditorBlock {
 
 private data class TextBlock(override val id: String, val value: TextFieldValue) : EditorBlock
 
-private data class ImageBlock(override val id: String, val fileName: String) : EditorBlock
+private data class ImageBlock(
+    override val id: String,
+    val fileName: String,
+    val widthPercent: Int? = null,
+) : EditorBlock
+
+private data class AudioBlock(override val id: String, val fileName: String) : EditorBlock
+
+private data class ChecklistEntry(val id: String, val text: String, val checked: Boolean)
+
+private data class ChecklistBlock(
+    override val id: String,
+    val items: List<ChecklistEntry>,
+) : EditorBlock
+
+private data class TableBlock(
+    override val id: String,
+    val columnWidths: List<Int>,
+    val cells: List<List<String>>,
+) : EditorBlock
 
 private fun newBlockId(): String = UUID.randomUUID().toString()
+
+private val CHECKLIST_LINE = Regex("""^- \[( |x|X)] ?(.*)$""")
+private val TABLE_LINE = Regex("""^\[\[table:([A-Za-z0-9+/=]+)]]$""")
 
 private fun parseContentToBlocks(content: String): List<EditorBlock> {
     val result = mutableListOf<EditorBlock>()
     val textLines = mutableListOf<String>()
+    val checkItems = mutableListOf<ChecklistEntry>()
     fun flushText() {
         result.add(TextBlock(newBlockId(), TextFieldValue(textLines.joinToString("\n"))))
         textLines.clear()
     }
-    content.split("\n").forEach { line ->
-        val image = AttachmentMarkup.imageFileName(line)
-        if (image != null) {
-            flushText()
-            result.add(ImageBlock(newBlockId(), image))
-        } else {
-            textLines.add(line)
+    fun flushChecklist() {
+        if (checkItems.isNotEmpty()) {
+            result.add(ChecklistBlock(newBlockId(), checkItems.toList()))
+            checkItems.clear()
         }
     }
-    // Always keep a trailing text block so there is somewhere to type after an image.
+    content.split("\n").forEach { line ->
+        val ref = AttachmentMarkup.parseLine(line)
+        val tableMatch = TABLE_LINE.matchEntire(line.trim())
+        val checkMatch = CHECKLIST_LINE.matchEntire(line)
+        when {
+            ref != null -> {
+                flushChecklist(); flushText()
+                if (ref.kind == AttachmentKind.AUDIO) result.add(AudioBlock(newBlockId(), ref.fileName))
+                else result.add(ImageBlock(newBlockId(), ref.fileName, ref.widthPercent))
+            }
+            tableMatch != null -> {
+                flushChecklist(); flushText()
+                val table = decodeTable(newBlockId(), tableMatch.groupValues[1])
+                if (table != null) result.add(table) else textLines.add(line)
+            }
+            checkMatch != null -> {
+                // Only break the text run when a checklist run actually starts.
+                if (checkItems.isEmpty()) flushText()
+                checkItems.add(
+                    ChecklistEntry(
+                        newBlockId(),
+                        checkMatch.groupValues[2],
+                        checkMatch.groupValues[1].equals("x", ignoreCase = true),
+                    ),
+                )
+            }
+            else -> {
+                flushChecklist()
+                textLines.add(line)
+            }
+        }
+    }
+    flushChecklist()
+    // Always keep a trailing text block so there is somewhere to type after a block.
     flushText()
     return result
 }
@@ -1024,6 +1955,60 @@ private fun serializeBlocks(blocks: List<EditorBlock>): String =
     blocks.joinToString("\n") { block ->
         when (block) {
             is TextBlock -> block.value.text
-            is ImageBlock -> AttachmentMarkup.token(block.fileName)
+            is ImageBlock -> AttachmentMarkup.imageToken(block.fileName, block.widthPercent)
+            is AudioBlock -> AttachmentMarkup.audioToken(block.fileName)
+            is ChecklistBlock -> block.items.joinToString("\n") { item ->
+                "- [${if (item.checked) "x" else " "}] ${item.text}"
+            }
+            is TableBlock -> encodeTable(block)
         }
     }
+
+private fun encodeTable(block: TableBlock): String {
+    val obj = JSONObject()
+    obj.put("w", JSONArray(block.columnWidths))
+    val rows = JSONArray()
+    block.cells.forEach { row -> rows.put(JSONArray(row)) }
+    obj.put("c", rows)
+    val bytes = obj.toString().toByteArray(Charsets.UTF_8)
+    return "[[table:${Base64.encodeToString(bytes, Base64.NO_WRAP)}]]"
+}
+
+private fun decodeTable(id: String, encoded: String): TableBlock? = runCatching {
+    val json = String(Base64.decode(encoded, Base64.NO_WRAP), Charsets.UTF_8)
+    val obj = JSONObject(json)
+    val wArr = obj.getJSONArray("w")
+    val widths = (0 until wArr.length()).map { wArr.getInt(it) }
+    val cArr = obj.getJSONArray("c")
+    val cells = (0 until cArr.length()).map { r ->
+        val row = cArr.getJSONArray(r)
+        (0 until row.length()).map { row.getString(it) }
+    }
+    if (cells.isEmpty() || widths.isEmpty()) null else TableBlock(id, widths, cells)
+}.getOrNull()
+
+private fun emptyTable(rows: Int, cols: Int): TableBlock = TableBlock(
+    id = newBlockId(),
+    columnWidths = List(cols) { 130 },
+    cells = List(rows) { List(cols) { "" } },
+)
+
+private fun TableBlock.setCell(r: Int, c: Int, value: String): TableBlock =
+    copy(cells = cells.mapIndexed { ri, row ->
+        if (ri == r) row.mapIndexed { ci, cell -> if (ci == c) value else cell } else row
+    })
+
+private fun TableBlock.setColumnWidth(c: Int, width: Int): TableBlock =
+    copy(columnWidths = columnWidths.mapIndexed { i, w -> if (i == c) width else w })
+
+private fun TableBlock.addRow(): TableBlock = copy(cells = cells + listOf(List(columnWidths.size) { "" }))
+
+private fun TableBlock.removeRow(): TableBlock =
+    if (cells.size <= 1) this else copy(cells = cells.dropLast(1))
+
+private fun TableBlock.addColumn(): TableBlock =
+    copy(columnWidths = columnWidths + 130, cells = cells.map { it + "" })
+
+private fun TableBlock.removeColumn(): TableBlock =
+    if (columnWidths.size <= 1) this
+    else copy(columnWidths = columnWidths.dropLast(1), cells = cells.map { it.dropLast(1) })

@@ -171,8 +171,12 @@
           <td>Biometric (<code>USE_BIOMETRIC</code>)</td>
           <td>Used only if you turn on <strong>App lock</strong>, to unlock the app with your fingerprint, face, or device screen lock. Biometric data is handled entirely by the Android system — the app never sees or stores it.</td>
         </tr>
+        <tr>
+          <td>Microphone (<code>RECORD_AUDIO</code>)</td>
+          <td>Used only when you tap <strong>Record voice note</strong> in the editor, to capture audio you attach to a note. Recording happens only on that explicit action while the app is open, and the audio is saved to the app's private, on-device storage. It is never uploaded.</td>
+        </tr>
       </table>
-      <p class="muted" style="margin-top:14px;">The app requests no location, contacts, microphone, or camera permissions for its core note features.</p>
+      <p class="muted" style="margin-top:14px;">The app requests no location or contacts permissions, and no camera permission of its own - photos are added through the Android system photo picker or camera app.</p>
     </div>
 
     <div class="card" id="cloud">

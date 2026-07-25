@@ -32,6 +32,12 @@ interface NoteDao {
     @Query("UPDATE notes SET colorArgb = :colorArgb, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setColor(id: String, colorArgb: Int, updatedAt: Long)
 
+    @Query("UPDATE notes SET folderId = :folderId, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setFolder(id: String, folderId: String?, updatedAt: Long)
+
+    @Query("UPDATE notes SET folderId = :newFolderId WHERE folderId = :oldFolderId")
+    suspend fun reparentNotes(oldFolderId: String, newFolderId: String?)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNoteById(id: String)
 
@@ -53,8 +59,20 @@ interface FolderDao {
     @Query("SELECT * FROM folders ORDER BY name ASC")
     fun getAllFolders(): Flow<List<FolderEntity>>
 
+    @Query("SELECT * FROM folders WHERE id = :id")
+    suspend fun getFolderById(id: String): FolderEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFolder(folder: FolderEntity)
+
+    @Query("UPDATE folders SET name = :name WHERE id = :id")
+    suspend fun renameFolder(id: String, name: String)
+
+    @Query("UPDATE folders SET parentId = :parentId WHERE id = :id")
+    suspend fun setFolderParent(id: String, parentId: String?)
+
+    @Query("UPDATE folders SET parentId = :newParent WHERE parentId = :oldParent")
+    suspend fun reparentChildFolders(oldParent: String, newParent: String?)
 
     @Query("DELETE FROM folders WHERE id = :id")
     suspend fun deleteFolderById(id: String)

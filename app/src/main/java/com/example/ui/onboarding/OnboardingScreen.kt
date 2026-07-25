@@ -2,6 +2,7 @@ package com.example.ui.onboarding
 
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -39,9 +40,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.R
 import com.example.ui.components.BrandGradientButton
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.brandGradientHorizontal
@@ -52,13 +56,15 @@ private data class OnboardingPage(
     val icon: ImageVector,
     val title: String,
     val subtitle: String,
+    val showAppIcon: Boolean = false,
 )
 
 private val pages = listOf(
     OnboardingPage(
         icon = Icons.Rounded.EditNote,
         title = "Welcome to MyNotes+",
-        subtitle = "A calm, private space for everything on your mind — notes, checklists and ideas.",
+        subtitle = "A calm, private space for everything on your mind - notes, checklists and ideas.",
+        showAppIcon = true,
     ),
     OnboardingPage(
         icon = Icons.Rounded.Lock,
@@ -68,7 +74,7 @@ private val pages = listOf(
     OnboardingPage(
         icon = Icons.Rounded.Checklist,
         title = "Notes, checklists & more",
-        subtitle = "Write freely or build interactive checklists you can tick off. Pin, favourite, colour and archive to stay organised. Everything works offline, instantly — let's begin.",
+        subtitle = "Write freely or build interactive checklists you can tick off. Pin, favourite, colour and archive to stay organised. Everything works offline, instantly - let's begin.",
     ),
 )
 
@@ -165,15 +171,34 @@ private fun OnboardingPageContent(page: OnboardingPage) {
                 .size(120.dp)
                 .neumorphicRaised(60.dp, neu, elevation = 14.dp)
                 .clip(CircleShape)
-                .background(brandGradientHorizontal()),
+                .then(
+                    if (page.showAppIcon) Modifier
+                    else Modifier.background(brandGradientHorizontal())
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = page.icon,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(56.dp),
-            )
+            if (page.showAppIcon) {
+                // Render the real adaptive launcher icon so the first screen matches
+                // the icon the user tapped on their home screen.
+                Image(
+                    painter = painterResource(R.drawable.ic_launcher_background),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.matchParentSize(),
+                )
+                Image(
+                    painter = painterResource(R.drawable.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.matchParentSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = page.icon,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(56.dp),
+                )
+            }
         }
         Spacer(Modifier.height(40.dp))
         Text(

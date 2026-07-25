@@ -52,7 +52,7 @@ private val ALLOWED_AUTHENTICATORS =
  * Gates [content] behind a biometric / device-credential prompt when [enabled].
  *
  * - Enabling the lock mid-session (e.g. toggling it in Settings) does NOT lock the
- *   current session — it takes effect from the next launch / return, so the user
+ *   current session - it takes effect from the next launch / return, so the user
  *   stays exactly where they were.
  * - Locks again whenever the app is genuinely backgrounded (ignores rotation).
  * - Re-prompts automatically every time the app returns to the foreground.
@@ -103,7 +103,7 @@ fun AppLockGate(enabled: Boolean, content: @Composable () -> Unit) {
                 }
 
                 override fun onAuthenticationFailed() {
-                    // Single mismatch (e.g. wrong finger) — keep the prompt open.
+                    // Single mismatch (e.g. wrong finger) - keep the prompt open.
                 }
             },
         )

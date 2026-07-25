@@ -7,7 +7,7 @@ import java.util.UUID
 
 /**
  * Room entity for a note. Title and content are stored ONLY as AES-256-GCM
- * ciphertext ([encryptedTitle] / [encryptedContent]) — plaintext never touches disk.
+ * ciphertext ([encryptedTitle] / [encryptedContent]) - plaintext never touches disk.
  */
 @Entity(
     tableName = "notes",
@@ -37,4 +37,5 @@ data class FolderEntity(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
     val colorArgb: Int = 0,
+    val parentId: String? = null,
 )

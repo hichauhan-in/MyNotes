@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
@@ -42,6 +43,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Alarm
 import androidx.compose.material.icons.rounded.CalendarMonth
@@ -64,13 +67,17 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.CurrencyRupee
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.GridOn
 import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LocalCafe
 import androidx.compose.material.icons.rounded.MoreVert
@@ -81,6 +88,7 @@ import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shop
 import androidx.compose.material.icons.rounded.Unarchive
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -88,6 +96,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -105,12 +114,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.attachments.AttachmentStore
 import com.example.domain.model.CustomTemplate
+import com.example.domain.model.Folder
 import com.example.domain.model.Note
 import com.example.ui.components.BrandGradientButton
 import com.example.ui.components.EmptyState
@@ -131,7 +142,7 @@ import java.util.concurrent.TimeUnit
 fun HomeScreen(
     viewModel: HomeViewModel,
     onNoteClick: (String) -> Unit,
-    onCreateNote: (template: String?) -> Unit,
+    onCreateNote: (template: String?, folderId: String?) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -147,20 +158,44 @@ fun HomeScreen(
     var showCoffeeSheet by remember { mutableStateOf(false) }
     var showRetentionSheet by remember { mutableStateOf(false) }
     var showTemplateCreator by remember { mutableStateOf(false) }
+    var showBookCreator by remember { mutableStateOf(false) }
+    var showMoveSelection by remember { mutableStateOf(false) }
+    var moveTargetNote by remember { mutableStateOf<Note?>(null) }
+    var bookActionsFor by remember { mutableStateOf<Folder?>(null) }
+    var renameBookFor by remember { mutableStateOf<Folder?>(null) }
+    var moveBookFor by remember { mutableStateOf<Folder?>(null) }
+
+    val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
+    val foldersById = remember(allFolders) { allFolders.associateBy { it.id } }
 
     val insets = WindowInsets.systemBars.asPaddingValues()
     val visibleIds = remember(state.pinned, state.notes) {
         state.pinned.map { it.id } + state.notes.map { it.id }
     }
 
-    // In selection mode, the back gesture exits selection instead of closing the app.
+    // Back exits selection, then steps out of a book, before leaving the screen.
     BackHandler(enabled = selectionMode) { viewModel.clearSelection() }
+    BackHandler(enabled = !selectionMode && state.currentBook != null) { viewModel.goUp() }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
+        if (state.isEmpty && !state.loading && !selectionMode) {
+            EmptyHomeContent(
+                insets = insets,
+                noteCount = state.totalNotes,
+                query = query,
+                onQueryChange = viewModel::onQueryChanged,
+                selectedFilter = selectedFilter,
+                onFilterSelect = viewModel::onFilterChanged,
+                currentBook = state.currentBook,
+                onExitBook = viewModel::goUp,
+                onCoffee = { showCoffeeSheet = true },
+                onOpenSettings = onOpenSettings,
+            )
+        } else {
         LazyVerticalStaggeredGrid(
             columns = StaggeredGridCells.Adaptive(168.dp),
             modifier = Modifier.fillMaxSize(),
@@ -212,14 +247,48 @@ fun HomeScreen(
                 }
             }
 
+            val currentBook = state.currentBook
+            if (selectedFilter == NoteFilter.ALL && currentBook != null) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Column {
+                        BookHeader(
+                            book = currentBook,
+                            onBack = viewModel::goUp,
+                            onOptions = { bookActionsFor = currentBook },
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
+                }
+            }
+
+            if (selectedFilter == NoteFilter.ALL && state.books.isNotEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Column {
+                        SectionHeader(title = "Books")
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                items(state.books, key = { "book_${it.folder.id}" }) { book ->
+                    BookCard(
+                        book = book,
+                        onOpen = { viewModel.openBook(book.folder.id) },
+                        onOptions = { bookActionsFor = book.folder },
+                    )
+                }
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Spacer(Modifier.height(20.dp))
+                }
+            }
+
             if (selectedFilter == NoteFilter.TRASH && !state.isEmpty) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
                         TrashBanner(
                             retentionDays = retentionDays,
                             onChangeRetention = { showRetentionSheet = true },
-                            onEmptyTrash = viewModel::emptyTrash,
                         )
+                        Spacer(Modifier.height(12.dp))
+                        EmptyTrashButton(onClick = viewModel::emptyTrash)
                         Spacer(Modifier.height(16.dp))
                     }
                 }
@@ -235,6 +304,7 @@ fun HomeScreen(
                 items(state.pinned, key = { "pin_${it.id}" }) { note ->
                     NoteCard(
                         note = note,
+                        folderName = foldersById[note.folderId]?.name,
                         selected = note.id in selectedIds,
                         selectionMode = selectionMode,
                         onOpen = { onNoteClick(note.id) },
@@ -257,6 +327,7 @@ fun HomeScreen(
                 items(state.notes, key = { it.id }) { note ->
                     NoteCard(
                         note = note,
+                        folderName = foldersById[note.folderId]?.name,
                         selected = note.id in selectedIds,
                         selectionMode = selectionMode,
                         onOpen = { onNoteClick(note.id) },
@@ -265,20 +336,7 @@ fun HomeScreen(
                     )
                 }
             }
-
-            if (state.isEmpty && !state.loading) {
-                item(span = StaggeredGridItemSpan.FullLine) {
-                    Column {
-                        Spacer(Modifier.height(40.dp))
-                        EmptyState(
-                            icon = emptyIconFor(selectedFilter),
-                            title = emptyTitleFor(selectedFilter, query),
-                            subtitle = emptySubtitleFor(selectedFilter),
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            }
+        }
         }
 
         // Dim scrim behind the expanded FAB menu.
@@ -304,12 +362,16 @@ fun HomeScreen(
                 onToggle = { fabExpanded = !fabExpanded },
                 onAction = { template ->
                     fabExpanded = false
-                    onCreateNote(template)
+                    onCreateNote(template, viewModel.creationFolderId())
                 },
                 customTemplates = customTemplates,
                 onCreateTemplate = {
                     fabExpanded = false
                     showTemplateCreator = true
+                },
+                onCreateBook = {
+                    fabExpanded = false
+                    showBookCreator = true
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -332,6 +394,7 @@ fun HomeScreen(
                 onTrash = viewModel::bulkTrash,
                 onRestore = viewModel::bulkRestore,
                 onDeleteForever = viewModel::bulkDeleteForever,
+                onMove = { showMoveSelection = true },
                 modifier = Modifier
                     .padding(horizontal = 20.dp)
                     .padding(bottom = insets.calculateBottomPadding() + 20.dp),
@@ -344,6 +407,10 @@ fun HomeScreen(
         NoteActionsSheet(
             note = current,
             filter = selectedFilter,
+            onMove = {
+                actionNote = null
+                moveTargetNote = current
+            },
             onDismiss = { actionNote = null },
             viewModel = viewModel,
         )
@@ -376,6 +443,138 @@ fun HomeScreen(
             onDelete = { viewModel.deleteCustomTemplate(it) },
             onDismiss = { showTemplateCreator = false },
         )
+    }
+
+    if (showBookCreator) {
+        BookNameDialog(
+            title = "New book",
+            initial = "",
+            confirmLabel = "Create",
+            onConfirm = {
+                viewModel.createBook(it)
+                showBookCreator = false
+            },
+            onDismiss = { showBookCreator = false },
+        )
+    }
+
+    renameBookFor?.let { book ->
+        BookNameDialog(
+            title = "Rename book",
+            initial = book.name,
+            confirmLabel = "Save",
+            onConfirm = {
+                viewModel.renameBook(book.id, it)
+                renameBookFor = null
+            },
+            onDismiss = { renameBookFor = null },
+        )
+    }
+
+    if (showMoveSelection) {
+        FolderPickerSheet(
+            title = "Move to book",
+            folders = allFolders,
+            onSelect = {
+                viewModel.moveSelectedToBook(it)
+                showMoveSelection = false
+            },
+            onDismiss = { showMoveSelection = false },
+        )
+    }
+
+    moveTargetNote?.let { note ->
+        FolderPickerSheet(
+            title = "Move to book",
+            folders = allFolders,
+            onSelect = {
+                viewModel.moveNoteToBook(note.id, it)
+                moveTargetNote = null
+            },
+            onDismiss = { moveTargetNote = null },
+        )
+    }
+
+    moveBookFor?.let { book ->
+        FolderPickerSheet(
+            title = "Move book into",
+            folders = allFolders,
+            excludeSubtreeOf = book.id,
+            onSelect = {
+                viewModel.moveBook(book.id, it)
+                moveBookFor = null
+            },
+            onDismiss = { moveBookFor = null },
+        )
+    }
+
+    bookActionsFor?.let { book ->
+        BookActionsSheet(
+            book = book,
+            onRename = {
+                bookActionsFor = null
+                renameBookFor = book
+            },
+            onMove = {
+                bookActionsFor = null
+                moveBookFor = book
+            },
+            onDelete = {
+                bookActionsFor = null
+                viewModel.deleteBook(book.id)
+            },
+            onDismiss = { bookActionsFor = null },
+        )
+    }
+}
+
+@Composable
+private fun EmptyHomeContent(
+    insets: PaddingValues,
+    noteCount: Int,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    selectedFilter: NoteFilter,
+    onFilterSelect: (NoteFilter) -> Unit,
+    currentBook: Folder?,
+    onExitBook: () -> Unit,
+    onCoffee: () -> Unit,
+    onOpenSettings: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(
+                start = 20.dp,
+                end = 20.dp,
+                top = insets.calculateTopPadding() + 10.dp,
+                bottom = insets.calculateBottomPadding() + 24.dp,
+            ),
+    ) {
+        HomeHeader(noteCount = noteCount, onCoffee = onCoffee, onOpenSettings = onOpenSettings)
+        Spacer(Modifier.height(18.dp))
+        SearchField(value = query, onValueChange = onQueryChange)
+        Spacer(Modifier.height(16.dp))
+        FilterChipsRow(selected = selectedFilter, onSelect = onFilterSelect)
+        if (selectedFilter == NoteFilter.ALL && currentBook != null) {
+            Spacer(Modifier.height(16.dp))
+            BookHeader(book = currentBook, onBack = onExitBook, onOptions = null)
+        }
+        // Centre the empty state in whatever space is left below the search + filters.
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
+            EmptyState(
+                icon = if (currentBook != null) Icons.Rounded.MenuBook else emptyIconFor(selectedFilter),
+                title = if (currentBook != null) "This book is empty" else emptyTitleFor(selectedFilter, query),
+                subtitle = if (currentBook != null) "Add a note or a sub-book with the + button."
+                else emptySubtitleFor(selectedFilter),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
@@ -473,6 +672,7 @@ private fun SelectionActionBar(
     onTrash: () -> Unit,
     onRestore: () -> Unit,
     onDeleteForever: () -> Unit,
+    onMove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     NeuSurface(
@@ -492,6 +692,7 @@ private fun SelectionActionBar(
             } else {
                 SelectionActionItem(Icons.Rounded.PushPin, "Pin", onPin)
                 SelectionActionItem(Icons.Rounded.FavoriteBorder, "Favorite", onFavorite)
+                SelectionActionItem(Icons.Rounded.Folder, "Move", onMove)
                 SelectionActionItem(Icons.Rounded.Archive, "Archive", onArchive)
                 SelectionActionItem(Icons.Rounded.Delete, "Trash", onTrash, destructive = true)
             }
@@ -630,7 +831,6 @@ private fun FilterChipsRow(
 private fun TrashBanner(
     retentionDays: Int,
     onChangeRetention: () -> Unit,
-    onEmptyTrash: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -665,30 +865,49 @@ private fun TrashBanner(
             )
         }
         Spacer(Modifier.height(6.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = "Deleted notes are removed permanently.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                text = "Empty now",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .clickable(onClick = onEmptyTrash)
-                    .padding(horizontal = 10.dp, vertical = 4.dp),
-            )
-        }
+        Text(
+            text = "Deleted notes are removed permanently.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+        )
+    }
+}
+
+/** A deliberately distinct, full-width destructive action, kept apart from the info banner. */
+@Composable
+private fun EmptyTrashButton(onClick: () -> Unit) {
+    val neu = LocalNeuColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neumorphicRaised(16.dp, neu, elevation = 6.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.error)
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.DeleteForever,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onError,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = "Empty Trash now",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onError,
+        )
     }
 }
 
 @Composable
 private fun NoteCard(
     note: Note,
+    folderName: String? = null,
     selected: Boolean,
     selectionMode: Boolean,
     onOpen: () -> Unit,
@@ -705,9 +924,15 @@ private fun NoteCard(
             contentPadding = PaddingValues(0.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            if (note.attachments.isNotEmpty()) {
+            val thumbnail = note.attachments.firstOrNull {
+                it.endsWith(".jpg", ignoreCase = true) ||
+                    it.endsWith(".jpeg", ignoreCase = true) ||
+                    it.endsWith(".png", ignoreCase = true) ||
+                    it.endsWith(".webp", ignoreCase = true)
+            }
+            if (thumbnail != null) {
                 AsyncImage(
-                    model = AttachmentStore.fileFor(context, note.attachments.first()),
+                    model = AttachmentStore.fileFor(context, thumbnail),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -775,14 +1000,55 @@ private fun NoteCard(
                         }
                     }
 
+                    if (note.isSheet || note.isExpense) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = if (note.isSheet) Icons.Rounded.GridOn else Icons.Rounded.AccountBalanceWallet,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(14.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = if (note.isSheet) "Sheet" else "Expenses",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+
                     Spacer(Modifier.height(12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = relativeTime(note.updatedAt),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.weight(1f),
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = relativeTime(note.updatedAt),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline,
+                            )
+                            val hint = folderName ?: note.tags.firstOrNull()?.let { "#$it" }
+                            if (hint != null) {
+                                Spacer(Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (folderName != null) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.MenuBook,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(11.dp),
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        text = hint,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
                         if (note.isFavorite) {
                             Icon(
                                 imageVector = Icons.Rounded.Favorite,
@@ -843,6 +1109,7 @@ private fun ExpandableFab(
     onAction: (template: String?) -> Unit,
     customTemplates: List<CustomTemplate>,
     onCreateTemplate: () -> Unit,
+    onCreateBook: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val neu = LocalNeuColors.current
@@ -866,6 +1133,12 @@ private fun ExpandableFab(
                     }
                     Spacer(Modifier.height(12.dp))
                 }
+                FabAction("New book", Icons.Rounded.CreateNewFolder) { onCreateBook() }
+                Spacer(Modifier.height(12.dp))
+                FabAction("Sheet", Icons.Rounded.GridOn) { onAction("sheet") }
+                Spacer(Modifier.height(12.dp))
+                FabAction("Expenses", Icons.Rounded.AccountBalanceWallet) { onAction("expense") }
+                Spacer(Modifier.height(12.dp))
                 FabAction("Checklist", Icons.Rounded.Checklist) { onAction("checklist") }
                 Spacer(Modifier.height(12.dp))
                 FabAction("New note", Icons.Rounded.EditNote) { onAction(null) }
@@ -947,6 +1220,7 @@ private fun FabAction(
 private fun NoteActionsSheet(
     note: Note,
     filter: NoteFilter,
+    onMove: () -> Unit,
     onDismiss: () -> Unit,
     viewModel: HomeViewModel,
 ) {
@@ -992,6 +1266,7 @@ private fun NoteActionsSheet(
                     if (note.isArchived) Icons.Rounded.Unarchive else Icons.Rounded.Archive,
                     if (note.isArchived) "Unarchive" else "Archive",
                 ) { viewModel.toggleArchive(note); onDismiss() }
+                SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
                 SheetAction(Icons.Rounded.Delete, "Move to Trash", destructive = true) {
                     viewModel.moveToTrash(note); onDismiss()
                 }
@@ -1025,7 +1300,7 @@ private fun SheetAction(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
-    val sheetState = rememberModalBottomSheetState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1076,7 +1351,7 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
 
             Spacer(Modifier.height(20.dp))
             Text(
-                text = "A voluntary tip — a friendly gesture, nothing more. It does not " +
+                text = "A voluntary, friendly gesture, nothing more. It does not " +
                     "unlock any features, remove any limits, or change how the app works. " +
                     "MyNotes+ is completely free and always will be, and there's no " +
                     "obligation to contribute.",
@@ -1217,6 +1492,318 @@ private fun RetentionPickerSheet(
     }
 }
 
+// ---- Books (folders) -----------------------------------------------------------
+
+@Composable
+private fun BookCard(
+    book: BookItem,
+    onOpen: () -> Unit,
+    onOptions: () -> Unit,
+) {
+    NeuCard(
+        onClick = onOpen,
+        onLongClick = onOptions,
+        cornerRadius = 22.dp,
+        contentPadding = PaddingValues(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(brandGradientHorizontal()),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MenuBook,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+                Spacer(Modifier.weight(1f))
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = onOptions),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "Book options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = book.folder.name,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = bookSubtitle(book),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun bookSubtitle(book: BookItem): String {
+    val notes = if (book.noteCount == 1) "1 note" else "${book.noteCount} notes"
+    if (book.subBookCount == 0) return notes
+    val sub = if (book.subBookCount == 1) "1 book" else "${book.subBookCount} books"
+    return "$notes · $sub"
+}
+
+@Composable
+private fun BookHeader(
+    book: Folder,
+    onBack: () -> Unit,
+    onOptions: (() -> Unit)?,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onBack),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+                contentDescription = "Back",
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        Spacer(Modifier.width(6.dp))
+        Icon(
+            imageVector = Icons.Rounded.MenuBook,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = book.name,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onBackground,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (onOptions != null) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onOptions),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.MoreVert,
+                    contentDescription = "Book options",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BookNameDialog(
+    title: String,
+    initial: String,
+    confirmLabel: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = Icons.Rounded.CreateNewFolder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        },
+        title = { Text(title) },
+        text = {
+            TemplateTextField(name, { name = it }, "Book name", singleLine = true)
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (name.isNotBlank()) onConfirm(name.trim()) },
+                enabled = name.isNotBlank(),
+            ) { Text(confirmLabel) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+private data class FolderRow(val folder: Folder, val depth: Int)
+
+private fun flattenFolders(all: List<Folder>, excludeSubtreeOf: String?): List<FolderRow> {
+    val childrenOf = all.groupBy { it.parentId }
+    val excluded = mutableSetOf<String>()
+    if (excludeSubtreeOf != null) {
+        val stack = ArrayDeque<String>()
+        stack.add(excludeSubtreeOf)
+        while (stack.isNotEmpty()) {
+            val id = stack.removeLast()
+            if (excluded.add(id)) {
+                childrenOf[id].orEmpty().forEach { stack.add(it.id) }
+            }
+        }
+    }
+    val result = mutableListOf<FolderRow>()
+    fun visit(parentId: String?, depth: Int) {
+        childrenOf[parentId].orEmpty().sortedBy { it.name.lowercase() }.forEach { folder ->
+            if (folder.id in excluded) return@forEach
+            result.add(FolderRow(folder, depth))
+            visit(folder.id, depth + 1)
+        }
+    }
+    visit(null, 0)
+    return result
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FolderPickerSheet(
+    title: String,
+    folders: List<Folder>,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+    excludeSubtreeOf: String? = null,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val rows = remember(folders, excludeSubtreeOf) { flattenFolders(folders, excludeSubtreeOf) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(12.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                FolderPickerRow(Icons.Rounded.Home, "Home (no book)", 0) { onSelect(null) }
+                rows.forEach { row ->
+                    FolderPickerRow(Icons.Rounded.Folder, row.folder.name, row.depth + 1) {
+                        onSelect(row.folder.id)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerRow(
+    icon: ImageVector,
+    label: String,
+    depth: Int,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width((depth * 18).dp))
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookActionsSheet(
+    book: Folder,
+    onRename: () -> Unit,
+    onMove: () -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = book.name,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(16.dp))
+            SheetAction(Icons.Rounded.Edit, "Rename") { onRename() }
+            SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
+            SheetAction(Icons.Rounded.Delete, "Delete book", destructive = true) { onDelete() }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Deleting a book keeps its notes - they move up to the parent.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
+    }
+}
+
 private val templateIconOptions: List<Pair<String, ImageVector>> = listOf(
     "note" to Icons.Rounded.EditNote,
     "checklist" to Icons.Rounded.Checklist,
@@ -1249,7 +1836,7 @@ private fun TemplateManagerSheet(
     onDelete: (id: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedTab by remember { mutableStateOf(0) }
     var editingId by remember { mutableStateOf<String?>(null) }
     var name by remember { mutableStateOf("") }
@@ -1273,7 +1860,7 @@ private fun TemplateManagerSheet(
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
                 .padding(bottom = 28.dp)
-                .verticalScroll(rememberScrollState()),
+                .imePadding(),
         ) {
             Text(
                 text = "Templates",
@@ -1307,127 +1894,142 @@ private fun TemplateManagerSheet(
             }
 
             Spacer(Modifier.height(18.dp))
-            Column(modifier = Modifier.fillMaxWidth()) {
+            // A fixed-height body so switching tabs never resizes the sheet.
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(460.dp),
+            ) {
                 if (selectedTab == 0) {
-                    TemplateLabel("Name")
-                    TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        TemplateLabel("Name")
+                        TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
 
-                    Spacer(Modifier.height(16.dp))
-                    TemplateLabel("Icon")
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        templateIconOptions.forEach { (key, icon) ->
-                            IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    TemplateLabel("Template text")
-                    TemplateTextField(content, { content = it }, "Type your template…", minHeight = 120.dp)
-
-                    Spacer(Modifier.height(20.dp))
-                    BrandGradientButton(
-                        text = if (editingId != null) "Update template" else "Save template",
-                        onClick = {
-                            if (name.isNotBlank()) {
-                                val id = editingId
-                                if (id != null) {
-                                    onUpdate(id, name.trim(), iconKey, content)
-                                } else {
-                                    onCreate(name.trim(), iconKey, content)
-                                }
-                                resetForm()
-                                selectedTab = 1
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (editingId != null) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            text = "Cancel edit",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Spacer(Modifier.height(16.dp))
+                        TemplateLabel("Icon")
+                        Row(
                             modifier = Modifier
-                                .align(Alignment.CenterHorizontally)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { resetForm() }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            templateIconOptions.forEach { (key, icon) ->
+                                IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
+                            }
+                        }
+
+                        Spacer(Modifier.height(16.dp))
+                        TemplateLabel("Template text")
+                        TemplateBodyField(
+                            value = content,
+                            onValueChange = { content = it },
+                            placeholder = "Type your template…",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
                         )
+
+                        Spacer(Modifier.height(16.dp))
+                        BrandGradientButton(
+                            text = if (editingId != null) "Update template" else "Save template",
+                            onClick = {
+                                if (name.isNotBlank()) {
+                                    val id = editingId
+                                    if (id != null) {
+                                        onUpdate(id, name.trim(), iconKey, content)
+                                    } else {
+                                        onCreate(name.trim(), iconKey, content)
+                                    }
+                                    resetForm()
+                                    selectedTab = 1
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        if (editingId != null) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = "Cancel edit",
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .align(Alignment.CenterHorizontally)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { resetForm() }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
                     }
                 } else {
                     if (templates.isEmpty()) {
-                        Text(
-                            text = "No templates yet. Create one from the New tab.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 12.dp),
-                        )
+                        TemplatesEmptyState(modifier = Modifier.fillMaxSize())
                     } else {
-                        templates.forEach { template ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(
-                                    imageVector = templateIcon(template.iconKey),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                                Spacer(Modifier.width(14.dp))
-                                Text(
-                                    text = template.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Box(
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            templates.forEach { template ->
+                                Row(
                                     modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .clickable {
-                                            editingId = template.id
-                                            name = template.name
-                                            iconKey = template.iconKey
-                                            content = template.content
-                                            selectedTab = 0
-                                        },
-                                    contentAlignment = Alignment.Center,
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Rounded.Edit,
-                                        contentDescription = "Edit template",
+                                        imageVector = templateIcon(template.iconKey),
+                                        contentDescription = null,
                                         tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp),
+                                        modifier = Modifier.size(22.dp),
                                     )
-                                }
-                                Spacer(Modifier.width(4.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .clickable {
-                                            if (editingId == template.id) resetForm()
-                                            onDelete(template.id)
-                                        },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Delete,
-                                        contentDescription = "Delete template",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(18.dp),
+                                    Spacer(Modifier.width(14.dp))
+                                    Text(
+                                        text = template.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
                                     )
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                editingId = template.id
+                                                name = template.name
+                                                iconKey = template.iconKey
+                                                content = template.content
+                                                selectedTab = 0
+                                            },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Edit,
+                                            contentDescription = "Edit template",
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
+                                    Spacer(Modifier.width(4.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                if (editingId == template.id) resetForm()
+                                                onDelete(template.id)
+                                            },
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Delete,
+                                            contentDescription = "Delete template",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -1435,6 +2037,78 @@ private fun TemplateManagerSheet(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TemplatesEmptyState(modifier: Modifier = Modifier) {
+    val neu = LocalNeuColors.current
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(92.dp)
+                .neumorphicRaised(46.dp, neu, elevation = 10.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Style,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(40.dp),
+            )
+        }
+        Spacer(Modifier.height(18.dp))
+        Text(
+            text = "No templates yet",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = "Create one in the New tab and it'll appear here.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+@Composable
+private fun TemplateBodyField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+) {
+    val neu = LocalNeuColors.current
+    Box(
+        modifier = modifier
+            .neumorphicRaised(16.dp, neu, elevation = 5.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(14.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(
+                text = placeholder,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            )
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 }
 

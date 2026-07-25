@@ -3,6 +3,9 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <!-- Recording voice notes. Audio is captured only while the editor is open, on
+         explicit user action, and is stored in app-private storage. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <application
         android:name=".VaultNotesApp"
