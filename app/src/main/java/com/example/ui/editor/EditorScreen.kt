@@ -54,8 +54,8 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.DragIndicator
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FormatBold
@@ -124,6 +124,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.example.data.attachments.AttachmentStore
 import com.example.domain.model.AttachmentKind
 import com.example.domain.model.AttachmentMarkup
@@ -164,6 +165,7 @@ fun EditorScreen(
     val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
     val blocks = remember { mutableStateListOf<EditorBlock>() }
     var focusedBlockId by remember { mutableStateOf<String?>(null) }
+    var cropImageBlock by remember { mutableStateOf<ImageBlock?>(null) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -220,6 +222,19 @@ fun EditorScreen(
         if (idx >= 0 && blocks[idx] is ImageBlock) {
             blocks[idx] = (blocks[idx] as ImageBlock).copy(widthPercent = widthPercent)
             pushBlocks(immediate = true)
+        }
+    }
+
+    // Swap an image block's file for a freshly cropped one and drop the old file.
+    fun replaceImageFile(blockId: String, newFileName: String) {
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && blocks[idx] is ImageBlock) {
+            val old = blocks[idx] as ImageBlock
+            if (old.fileName != newFileName) {
+                blocks[idx] = old.copy(fileName = newFileName)
+                AttachmentStore.delete(context, old.fileName)
+                pushBlocks(immediate = true)
+            }
         }
     }
 
@@ -452,6 +467,7 @@ fun EditorScreen(
                                     widthFraction = (block.widthPercent ?: 100) / 100f,
                                     onWidthChange = { pct -> resizeImageBlock(block.id, pct) },
                                     onRemove = { removeBlock(block.id) },
+                                    onCrop = { cropImageBlock = block },
                                 )
                                 Spacer(Modifier.height(12.dp))
                             }
@@ -583,6 +599,17 @@ fun EditorScreen(
                 showTableDialog = false
             },
             onDismiss = { showTableDialog = false },
+        )
+    }
+
+    cropImageBlock?.let { imageBlock ->
+        ImageCropDialog(
+            file = AttachmentStore.fileFor(context, imageBlock.fileName),
+            onCropped = { newName ->
+                replaceImageFile(imageBlock.id, newName)
+                cropImageBlock = null
+            },
+            onDismiss = { cropImageBlock = null },
         )
     }
 }
@@ -1301,14 +1328,26 @@ private fun ResizableAttachmentImage(
     widthFraction: Float,
     onWidthChange: (Int) -> Unit,
     onRemove: () -> Unit,
+    onCrop: () -> Unit,
 ) {
+    val context = LocalContext.current
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val maxWidthPx = with(LocalDensity.current) { maxWidth.toPx() }
-        var fraction by remember(widthFraction) { mutableStateOf(widthFraction) }
+        // Local, smoothly-updated width while dragging; synced when the saved value changes.
+        var fraction by remember { mutableStateOf(widthFraction) }
+        LaunchedEffect(widthFraction) { fraction = widthFraction }
+        // Decode once at the full container width so resizing just scales the cached bitmap
+        // (no re-decode flicker mid-drag).
+        val request = remember(file.path, maxWidthPx) {
+            ImageRequest.Builder(context)
+                .data(file)
+                .size(maxWidthPx.roundToInt().coerceAtLeast(1))
+                .build()
+        }
 
         Box(modifier = Modifier.fillMaxWidth(fraction.coerceIn(0.3f, 1f))) {
             AsyncImage(
-                model = file,
+                model = request,
                 contentDescription = "Attached image",
                 contentScale = ContentScale.FillWidth,
                 modifier = Modifier
@@ -1316,31 +1355,23 @@ private fun ResizableAttachmentImage(
                     .heightIn(max = 420.dp)
                     .clip(RoundedCornerShape(16.dp)),
             )
-            Box(
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(10.dp)
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
-                    .clickable(onClick = onRemove),
-                contentAlignment = Alignment.Center,
+                    .padding(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = "Remove image",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
+                ImageOverlayButton(icon = Icons.Rounded.Crop, description = "Crop image", onClick = onCrop)
+                ImageOverlayButton(icon = Icons.Rounded.Close, description = "Remove image", onClick = onRemove)
             }
             // Drag this corner handle to scale the image down (or back up).
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(10.dp)
-                    .size(32.dp)
+                    .size(40.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.45f))
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
                     .pointerInput(maxWidthPx) {
                         detectDragGestures(
                             onDrag = { change, drag ->
@@ -1358,10 +1389,29 @@ private fun ResizableAttachmentImage(
                     imageVector = Icons.Rounded.OpenInFull,
                     contentDescription = "Resize image",
                     tint = Color.White,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun ImageOverlayButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = Color.White,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -1642,7 +1692,6 @@ private fun TableBlockView(
     onRemove: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
-    val density = LocalDensity.current
     val current by rememberUpdatedState(block)
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -1690,8 +1739,28 @@ private fun TableBlockView(
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surface),
         ) {
+            // Column headers (A, B, C …) with a drag-to-resize grip on each right edge.
+            Row {
+                Box(
+                    modifier = Modifier
+                        .width(34.dp)
+                        .height(28.dp)
+                        .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                )
+                block.columnWidths.forEachIndexed { c, w ->
+                    TableColumnHeaderCell(
+                        label = tableColumnLabel(c),
+                        width = w,
+                        onResize = { nw -> onChange(current.setColumnWidth(c, nw), false) },
+                        onResizeEnd = { onChange(current, true) },
+                    )
+                }
+            }
+            // Data rows, each labelled with its 1-based row number.
             block.cells.forEachIndexed { r, row ->
                 Row {
+                    TableRowHeaderCell(number = r + 1)
                     row.forEachIndexed { c, cell ->
                         val w = block.columnWidths.getOrElse(c) { 130 }
                         Box(
@@ -1713,45 +1782,102 @@ private fun TableBlockView(
                     }
                 }
             }
-            Row(modifier = Modifier.fillMaxWidth()) {
-                block.columnWidths.forEachIndexed { c, w ->
+        }
+    }
+}
+
+private fun tableColumnLabel(c: Int): String {
+    var n = c
+    val sb = StringBuilder()
+    do {
+        sb.insert(0, ('A' + (n % 26)))
+        n = n / 26 - 1
+    } while (n >= 0)
+    return sb.toString()
+}
+
+@Composable
+private fun TableColumnHeaderCell(
+    label: String,
+    width: Int,
+    onResize: (Int) -> Unit,
+    onResizeEnd: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val currentWidth by rememberUpdatedState(width)
+    Box(
+        modifier = Modifier
+            .width(width.dp)
+            .height(28.dp)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .fillMaxHeight()
+                .width(18.dp)
+                .pointerInput(Unit) {
+                    var startW = 0
+                    var acc = 0f
+                    detectDragGestures(
+                        onDragStart = { startW = currentWidth; acc = 0f },
+                        onDrag = { change, drag ->
+                            change.consume()
+                            acc += drag.x
+                            val deltaDp = with(density) { acc.toDp().value }.toInt()
+                            onResize((startW + deltaDp).coerceIn(60, 320))
+                        },
+                        onDragEnd = { onResizeEnd() },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            TableGripDots()
+        }
+    }
+}
+
+@Composable
+private fun TableRowHeaderCell(number: Int) {
+    Box(
+        modifier = Modifier
+            .width(34.dp)
+            .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "$number",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Four dots hinting the column boundary can be dragged to resize. */
+@Composable
+private fun TableGripDots() {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        repeat(2) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(2) {
                     Box(
                         modifier = Modifier
-                            .width(w.dp)
-                            .height(16.dp),
-                        contentAlignment = Alignment.CenterEnd,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(26.dp)
-                                .pointerInput(c) {
-                                    var startW = 0
-                                    var acc = 0f
-                                    detectDragGestures(
-                                        onDragStart = {
-                                            startW = current.columnWidths.getOrElse(c) { 130 }
-                                            acc = 0f
-                                        },
-                                        onDrag = { change, drag ->
-                                            change.consume()
-                                            acc += drag.x
-                                            val deltaDp = with(density) { acc.toDp().value }.toInt()
-                                            onChange(current.setColumnWidth(c, (startW + deltaDp).coerceIn(60, 320)), false)
-                                        },
-                                        onDragEnd = { onChange(current, true) },
-                                    )
-                                },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.DragIndicator,
-                                contentDescription = "Resize column",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.size(14.dp),
-                            )
-                        }
-                    }
+                            .size(2.5.dp)
+                            .clip(CircleShape)
+                            .background(color),
+                    )
                 }
             }
         }

@@ -40,6 +40,15 @@ object AttachmentStore {
         if (copied) file.name else null
     }.getOrNull()
 
+    /** Writes a bitmap (e.g. a cropped image) into a fresh private JPEG; returns its name or null. */
+    fun saveBitmap(context: Context, bitmap: android.graphics.Bitmap): String? = runCatching {
+        val file = newImageFile(context)
+        file.outputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, out)
+        }
+        file.name
+    }.getOrNull()
+
     fun delete(context: Context, name: String) {
         runCatching { fileFor(context, name).delete() }
     }

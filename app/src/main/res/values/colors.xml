@@ -8,7 +8,9 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- Splash screen: pitch-black backdrop with a brand-purple disc behind the note mark. -->
-    <color name="splash_background">#FF000000</color>
+    <!-- App icon + splash: dark backdrop matched to the app's dark theme background
+         (md_dark_background = #121218), with a brand-purple disc behind the note on the splash. -->
+    <color name="ic_launcher_background">#FF121218</color>
+    <color name="splash_background">#FF121218</color>
     <color name="splash_icon_disc">#FF6D5EF6</color>
 </resources>
