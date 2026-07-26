@@ -49,21 +49,28 @@ object EncryptionManager {
         return Base64.encodeToString(combined, Base64.DEFAULT)
     }
 
-    fun decrypt(encryptedText: String): String {
+    fun decrypt(encryptedText: String): String = decryptOrNull(encryptedText) ?: ""
+
+    /**
+     * Decrypts [encryptedText], or returns null if it cannot be decrypted with the current key
+     * (e.g. the Keystore key is unavailable). Returning null - rather than a placeholder string -
+     * lets callers avoid ever overwriting the still-intact ciphertext, so a transient key issue
+     * never turns into permanent data loss.
+     */
+    fun decryptOrNull(encryptedText: String): String? {
         if (encryptedText.isEmpty()) return ""
         return try {
             val combined = Base64.decode(encryptedText, Base64.DEFAULT)
             val iv = combined.copyOfRange(0, GCM_IV_LENGTH)
             val encrypted = combined.copyOfRange(GCM_IV_LENGTH, combined.size)
-            
+
             val cipher = Cipher.getInstance(TRANSFORMATION)
             val spec = GCMParameterSpec(128, iv)
             cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), spec)
-            
-            val decrypted = cipher.doFinal(encrypted)
-            String(decrypted, Charsets.UTF_8)
+
+            String(cipher.doFinal(encrypted), Charsets.UTF_8)
         } catch (e: Exception) {
-            "Error decrypting"
+            null
         }
     }
 }

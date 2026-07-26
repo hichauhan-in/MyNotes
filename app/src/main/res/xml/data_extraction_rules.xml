@@ -1,19 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Notes are encrypted with a key held in the Android Keystore, which is bound to this device
+   and never leaves it. Backing up the encrypted database to another device would restore notes
+   that can no longer be decrypted, so the note database and its attachments are excluded from
+   cloud backup and device transfer. Non-sensitive preferences (theme, templates) may still back up.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="database" path="vault_notes_db" />
+        <exclude domain="database" path="vault_notes_db-wal" />
+        <exclude domain="database" path="vault_notes_db-shm" />
+        <exclude domain="database" path="vault_notes_db-journal" />
+        <exclude domain="file" path="attachments/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="database" path="vault_notes_db" />
+        <exclude domain="database" path="vault_notes_db-wal" />
+        <exclude domain="database" path="vault_notes_db-shm" />
+        <exclude domain="database" path="vault_notes_db-journal" />
+        <exclude domain="file" path="attachments/" />
     </device-transfer>
-    -->
 </data-extraction-rules>

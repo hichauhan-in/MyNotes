@@ -33,6 +33,10 @@ class NoteRepository(
 
     suspend fun saveNote(note: Note): Unit = withContext(Dispatchers.IO) {
         val existing = noteDao.getNoteById(note.id)
+        // Safety net: never overwrite a note whose stored content can't be decrypted right now.
+        // The original encrypted bytes may still be recoverable once the key is available again,
+        // so we refuse the save rather than replacing them with freshly-encrypted placeholder text.
+        if (existing != null && existing.isLocked()) return@withContext
         val entity = NoteEntity(
             id = note.id.ifBlank { UUID.randomUUID().toString() },
             encryptedTitle = EncryptionManager.encrypt(note.title),
@@ -99,20 +103,31 @@ class NoteRepository(
             .forEach { AttachmentStore.delete(appContext, it) }
     }
 
-    private fun NoteEntity.toNote() = Note(
-        id = id,
-        title = EncryptionManager.decrypt(encryptedTitle),
-        content = EncryptionManager.decrypt(encryptedContent),
-        createdAt = createdAt,
-        updatedAt = updatedAt,
-        isPinned = isPinned,
-        isFavorite = isFavorite,
-        isArchived = isArchived,
-        isTrashed = isTrashed,
-        folderId = folderId,
-        tags = tags.split(",").filter { it.isNotBlank() },
-        colorArgb = colorArgb,
-        type = runCatching { NoteType.valueOf(type) }.getOrDefault(NoteType.TEXT),
-        attachments = attachments.split(",").filter { it.isNotBlank() },
-    )
+    private fun NoteEntity.toNote(): Note {
+        val decTitle = EncryptionManager.decryptOrNull(encryptedTitle)
+        val decContent = EncryptionManager.decryptOrNull(encryptedContent)
+        val locked = (encryptedTitle.isNotEmpty() && decTitle == null) ||
+            (encryptedContent.isNotEmpty() && decContent == null)
+        return Note(
+            id = id,
+            title = if (locked) "🔒 Locked note" else (decTitle ?: ""),
+            content = if (locked) "" else (decContent ?: ""),
+            createdAt = createdAt,
+            updatedAt = updatedAt,
+            isPinned = isPinned,
+            isFavorite = isFavorite,
+            isArchived = isArchived,
+            isTrashed = isTrashed,
+            folderId = folderId,
+            tags = tags.split(",").filter { it.isNotBlank() },
+            colorArgb = colorArgb,
+            type = runCatching { NoteType.valueOf(type) }.getOrDefault(NoteType.TEXT),
+            attachments = attachments.split(",").filter { it.isNotBlank() },
+        )
+    }
+
+    /** True if the note has stored content/title that cannot be decrypted with the current key. */
+    private fun NoteEntity.isLocked(): Boolean =
+        (encryptedTitle.isNotEmpty() && EncryptionManager.decryptOrNull(encryptedTitle) == null) ||
+            (encryptedContent.isNotEmpty() && EncryptionManager.decryptOrNull(encryptedContent) == null)
 }
