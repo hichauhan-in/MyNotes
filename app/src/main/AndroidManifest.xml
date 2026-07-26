@@ -6,6 +6,9 @@
     <!-- Recording voice notes. Audio is captured only while the editor is open, on
          explicit user action, and is stored in app-private storage. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Optional, opt-in Google Drive sync. Only end-to-end-encrypted blobs are uploaded. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:name=".VaultNotesApp"

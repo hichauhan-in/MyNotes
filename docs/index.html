@@ -125,7 +125,7 @@
         <a href="#collect">What we collect</a>
         <a href="#storage">How notes are stored</a>
         <a href="#permissions">Permissions</a>
-        <a href="#cloud">Optional cloud backup</a>
+        <a href="#cloud">Google Drive sync</a>
         <a href="#tracking">No tracking</a>
         <a href="#retention">Retention & deletion</a>
         <a href="#security">Security</a>
@@ -165,7 +165,7 @@
       </p>
       <div class="highlight">
         Plaintext of your notes is <strong>never written to disk</strong> and never leaves your device
-        unless you explicitly enable encrypted cloud backup (see below), or you deliberately
+        unless you explicitly enable end‑to‑end encrypted Google Drive sync (see below), or you deliberately
         <strong>export a note or book</strong> — in which case the file is written only to your
         <strong>Downloads/MyNotes</strong> folder (or a different export folder you choose in Settings).
       </div>
@@ -190,22 +190,34 @@
           <td>Microphone (<code>RECORD_AUDIO</code>)</td>
           <td>Used only when you tap <strong>Record voice note</strong> in the editor, to capture audio you attach to a note. Recording happens only on that explicit action while the app is open, and the audio is saved to the app's private, on-device storage. It is never uploaded.</td>
         </tr>
+        <tr>
+          <td>Network access (<code>INTERNET</code>, <code>ACCESS_NETWORK_STATE</code>)</td>
+          <td>Used only if you turn on <strong>encrypted Google Drive sync</strong>, to upload and download your already‑encrypted notes to your own Google Drive. With sync off, the app makes no network connections at all.</td>
+        </tr>
       </table>
       <p class="muted" style="margin-top:14px;">The app requests no location or contacts permissions, and no camera permission of its own - photos are added through the Android system photo picker or camera app.</p>
     </div>
 
     <div class="card" id="cloud">
-      <h2><span class="dot"></span> Optional encrypted cloud backup</h2>
+      <h2><span class="dot"></span> Optional end‑to‑end encrypted Google Drive sync</h2>
       <p><span class="pill">Off by default</span></p>
       <p>
-        Cloud backup is <strong>disabled by default</strong> and only ever runs if you deliberately turn
-        it on. When enabled, MyNotes+ is designed to upload <strong>only encrypted data (ciphertext)</strong>
-        to your chosen cloud storage. Your encryption keys <strong>never leave your device</strong>, so the
-        cloud provider — and the developer — cannot read your notes.
+        Cloud sync is <strong>disabled by default</strong> and only ever runs if you deliberately turn it on
+        and connect a Google account. When enabled, every note and attachment is
+        <strong>encrypted on your device before it is uploaded</strong>, so only unreadable
+        <strong>ciphertext blobs</strong> are stored in your Google Drive.
+      </p>
+      <p>
+        The key that unlocks your notes is protected by a <strong>recovery passphrase that you choose</strong>
+        and is kept only in wrapped (encrypted) form. Because the key is never uploaded in the clear,
+        <strong>neither Google nor anyone you might accidentally share a Drive folder with can read your
+        notes</strong> — only someone with your account <em>and</em> passphrase can. Signing in on a new
+        device with the same account and passphrase restores everything.
       </p>
       <p class="muted">
-        If you enable cloud backup, the third‑party storage provider’s own privacy policy also applies to
-        the encrypted blobs stored in your account.
+        Google Drive’s own privacy policy also applies to the encrypted blobs stored in your account. If you
+        lose your recovery passphrase, the synced notes cannot be recovered — this is the trade‑off that keeps
+        them private to you.
       </p>
     </div>
 

@@ -179,7 +179,7 @@ fun SettingsScreen(
                 ToggleRow(
                     icon = Icons.Rounded.CloudUpload,
                     title = "Encrypted cloud sync",
-                    subtitle = "Back up to Google Drive - encrypted only",
+                    subtitle = "Sync your notes across devices with Google Drive - end-to-end encrypted",
                     checked = settings.cloudSyncEnabled,
                     onCheckedChange = viewModel::setCloudSyncEnabled,
                 )
@@ -188,7 +188,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(12.dp))
                         InfoBanner(
                             icon = Icons.Rounded.Shield,
-                            text = "Only encrypted blobs are uploaded. Your encryption keys never leave this device, so no one - not even us - can read your notes.",
+                            text = "Every note is encrypted on this device before anything is uploaded, so only unreadable blobs reach Google Drive. The key that unlocks them is protected by your recovery passphrase and is never shared - so neither Google, nor anyone you accidentally share a Drive folder with, can read your notes. Enter the same passphrase on a new device to restore everything.",
                             tint = MaterialTheme.colorScheme.tertiary,
                         )
                     }

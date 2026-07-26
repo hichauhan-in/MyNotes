@@ -25,6 +25,12 @@ data class AppSettings(
     val dynamicColor: Boolean = false,
     val accentIndex: Int = 0,
     val cloudSyncEnabled: Boolean = false,
+    /** The connected Google account email, or null when Drive sync isn't set up. */
+    val driveAccountEmail: String? = null,
+    /** True once the one-time "connect Google Drive?" prompt has been shown after onboarding. */
+    val syncPrompted: Boolean = false,
+    /** Epoch millis of the last successful sync, or 0 if never. */
+    val lastSyncedAt: Long = 0L,
     val appLockEnabled: Boolean = false,
     val hideFromRecents: Boolean = false,
     /** How many days deleted notes stay in Trash before auto-deletion. 0 == keep forever. */
@@ -47,6 +53,9 @@ class SettingsRepository(context: Context) {
         val DYNAMIC = booleanPreferencesKey("dynamic_color")
         val ACCENT = intPreferencesKey("accent_index")
         val CLOUD = booleanPreferencesKey("cloud_sync_enabled")
+        val DRIVE_EMAIL = stringPreferencesKey("drive_account_email")
+        val SYNC_PROMPTED = booleanPreferencesKey("sync_prompted")
+        val LAST_SYNCED = androidx.datastore.preferences.core.longPreferencesKey("last_synced_at")
         val LOCK = booleanPreferencesKey("app_lock_enabled")
         val HIDE_RECENTS = booleanPreferencesKey("hide_from_recents")
         val TRASH_RETENTION = intPreferencesKey("trash_retention_days")
@@ -74,6 +83,9 @@ class SettingsRepository(context: Context) {
             dynamicColor = prefs[Keys.DYNAMIC] ?: false,
             accentIndex = prefs[Keys.ACCENT] ?: 0,
             cloudSyncEnabled = prefs[Keys.CLOUD] ?: false,
+            driveAccountEmail = prefs[Keys.DRIVE_EMAIL],
+            syncPrompted = prefs[Keys.SYNC_PROMPTED] ?: false,
+            lastSyncedAt = prefs[Keys.LAST_SYNCED] ?: 0L,
             appLockEnabled = prefs[Keys.LOCK] ?: false,
             hideFromRecents = prefs[Keys.HIDE_RECENTS] ?: false,
             trashRetentionDays = prefs[Keys.TRASH_RETENTION] ?: 30,
@@ -93,6 +105,16 @@ class SettingsRepository(context: Context) {
 
     suspend fun setCloudSyncEnabled(value: Boolean) =
         edit { it[Keys.CLOUD] = value }
+
+    suspend fun setDriveAccountEmail(email: String?) = edit {
+        if (email == null) it.remove(Keys.DRIVE_EMAIL) else it[Keys.DRIVE_EMAIL] = email
+    }
+
+    suspend fun setSyncPrompted(value: Boolean) =
+        edit { it[Keys.SYNC_PROMPTED] = value }
+
+    suspend fun setLastSyncedAt(millis: Long) =
+        edit { it[Keys.LAST_SYNCED] = millis }
 
     suspend fun setAppLockEnabled(value: Boolean) =
         edit { it[Keys.LOCK] = value }
