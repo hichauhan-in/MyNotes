@@ -1,13 +1,17 @@
 package com.example.ui.editor
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DragIndicator
@@ -33,6 +38,8 @@ import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.PanTool
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Undo
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -54,15 +61,15 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
 import org.json.JSONArray
@@ -74,12 +81,36 @@ private enum class WbMode { DRAW, MOVE, TEXT }
 
 private data class WbText(val id: String, val x: Float, val y: Float, val text: String)
 
+/** A single freehand stroke. [color] 0 means "follow the theme" (onSurface); else a fixed ARGB. */
+private data class WbStroke(val points: List<Offset>, val color: Int, val width: Float)
+
 private data class WbModel(
-    val strokes: List<List<Offset>>,
+    val strokes: List<WbStroke>,
     val texts: List<WbText>,
     val panX: Float,
     val panY: Float,
     val scale: Float,
+)
+
+private data class PenPreset(val label: String, val width: Float)
+
+private val penPresets = listOf(
+    PenPreset("Fine", 2f),
+    PenPreset("Medium", 4f),
+    PenPreset("Bold", 7f),
+    PenPreset("Marker", 12f),
+)
+
+// 0 == follow the current theme (onSurface); everything else is a fixed ARGB colour.
+private val penColors = listOf(
+    0,
+    0xFFE53935.toInt(),
+    0xFFFB8C00.toInt(),
+    0xFFFDD835.toInt(),
+    0xFF43A047.toInt(),
+    0xFF1E88E5.toInt(),
+    0xFF8E24AA.toInt(),
+    0xFFEC407A.toInt(),
 )
 
 private fun emptyWb() = WbModel(emptyList(), emptyList(), 0f, 0f, 1f)
@@ -88,11 +119,25 @@ private fun parseWb(content: String): WbModel = runCatching {
     if (content.isBlank()) return@runCatching emptyWb()
     val o = JSONObject(content)
     val sArr = o.optJSONArray("s") ?: JSONArray()
-    val strokes = (0 until sArr.length()).map { i ->
-        val pts = sArr.getJSONArray(i)
-        (0 until pts.length()).map { j ->
-            val p = pts.getJSONArray(j)
-            Offset(p.getDouble(0).toFloat(), p.getDouble(1).toFloat())
+    val strokes = (0 until sArr.length()).mapNotNull { i ->
+        when (val el = sArr.get(i)) {
+            is JSONObject -> {
+                val ptsArr = el.optJSONArray("p") ?: JSONArray()
+                val pts = (0 until ptsArr.length()).map { j ->
+                    val p = ptsArr.getJSONArray(j)
+                    Offset(p.getDouble(0).toFloat(), p.getDouble(1).toFloat())
+                }
+                WbStroke(pts, el.optInt("c", 0), el.optDouble("w", 3.0).toFloat())
+            }
+            is JSONArray -> {
+                // Legacy format: a stroke was just an array of [x, y] points.
+                val pts = (0 until el.length()).map { j ->
+                    val p = el.getJSONArray(j)
+                    Offset(p.getDouble(0).toFloat(), p.getDouble(1).toFloat())
+                }
+                WbStroke(pts, 0, 3f)
+            }
+            else -> null
         }
     }
     val tArr = o.optJSONArray("t") ?: JSONArray()
@@ -122,8 +167,8 @@ private fun serializeWb(m: WbModel): String {
     val sArr = JSONArray()
     m.strokes.forEach { stroke ->
         val pts = JSONArray()
-        stroke.forEach { p -> pts.put(JSONArray().put(p.x.toDouble()).put(p.y.toDouble())) }
-        sArr.put(pts)
+        stroke.points.forEach { p -> pts.put(JSONArray().put(p.x.toDouble()).put(p.y.toDouble())) }
+        sArr.put(JSONObject().put("c", stroke.color).put("w", stroke.width.toDouble()).put("p", pts))
     }
     o.put("s", sArr)
     val tArr = JSONArray()
@@ -134,23 +179,28 @@ private fun serializeWb(m: WbModel): String {
     return o.toString()
 }
 
-private fun DrawScope.drawWbStroke(points: List<Offset>, color: Color) {
+private fun DrawScope.drawWbStroke(points: List<Offset>, color: Color, width: Float) {
     when {
-        points.size == 1 -> drawCircle(color, radius = 2.dp.toPx(), center = points[0])
+        points.size == 1 -> drawCircle(color, radius = width.dp.toPx() / 2f, center = points[0])
         points.size > 1 -> {
             val path = Path().apply {
                 moveTo(points[0].x, points[0].y)
                 for (i in 1 until points.size) lineTo(points[i].x, points[i].y)
             }
-            drawPath(path, color, style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(
+                path = path,
+                color = color,
+                style = Stroke(width = width.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+            )
         }
     }
 }
 
 /**
  * A pan/zoomable "whiteboard" note: freehand scribbling is the default, and the user can drop
- * draggable text notes and move around the infinite canvas. Kept GPU-cheap (one transformed
- * Canvas + absolutely-positioned text) so panning and drawing stay smooth.
+ * draggable text notes and move around the infinite canvas. The strokes and the text notes share
+ * one graphics-layer transform, so everything pans and zooms together (a text note keeps its place
+ * and scales with the drawing).
  */
 @Composable
 internal fun ScribbleEditor(
@@ -165,8 +215,11 @@ internal fun ScribbleEditor(
     var model by remember { mutableStateOf(parseWb(content)) }
     LaunchedEffect(seedKey) { model = parseWb(content) }
     var mode by remember { mutableStateOf(WbMode.DRAW) }
+    var penWidth by remember { mutableStateOf(4f) }
+    var penColor by remember { mutableStateOf(0) }
     val livePoints = remember { mutableStateListOf<Offset>() }
-    val strokeColor = MaterialTheme.colorScheme.onSurface
+    val defaultStrokeColor = MaterialTheme.colorScheme.onSurface
+    val liveColor = if (penColor == 0) defaultStrokeColor else Color(penColor)
 
     fun update(m: WbModel) {
         model = m
@@ -230,7 +283,7 @@ internal fun ScribbleEditor(
                             }
                         }
                         if (livePoints.isNotEmpty()) {
-                            update(model.copy(strokes = model.strokes + listOf(livePoints.toList())))
+                            update(model.copy(strokes = model.strokes + WbStroke(livePoints.toList(), penColor, penWidth)))
                         }
                         livePoints.clear()
                     }
@@ -254,40 +307,48 @@ internal fun ScribbleEditor(
             }
 
             Box(modifier = Modifier.fillMaxSize().then(gestureModifier)) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    withTransform({
-                        translate(model.panX, model.panY)
-                        scale(model.scale, model.scale, pivot = Offset.Zero)
-                    }) {
-                        model.strokes.forEach { drawWbStroke(it, strokeColor) }
-                        if (livePoints.isNotEmpty()) drawWbStroke(livePoints.toList(), strokeColor)
+                // Strokes + text notes share this transform, so they pan/zoom together.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            translationX = model.panX
+                            translationY = model.panY
+                            scaleX = model.scale
+                            scaleY = model.scale
+                            transformOrigin = TransformOrigin(0f, 0f)
+                        },
+                ) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        model.strokes.forEach { stroke ->
+                            val c = if (stroke.color == 0) defaultStrokeColor else Color(stroke.color)
+                            drawWbStroke(stroke.points, c, stroke.width)
+                        }
+                        if (livePoints.isNotEmpty()) drawWbStroke(livePoints.toList(), liveColor, penWidth)
                     }
-                }
-                model.texts.forEach { textNote ->
-                    key(textNote.id) {
-                        WbTextNote(
-                            note = textNote,
-                            scale = model.scale,
-                            panX = model.panX,
-                            panY = model.panY,
-                            onMove = { dx, dy ->
-                                update(
-                                    model.copy(
-                                        texts = model.texts.map {
-                                            if (it.id == textNote.id) it.copy(x = it.x + dx / model.scale, y = it.y + dy / model.scale) else it
-                                        },
-                                    ),
-                                )
-                            },
-                            onText = { value ->
-                                update(
-                                    model.copy(
-                                        texts = model.texts.map { if (it.id == textNote.id) it.copy(text = value) else it },
-                                    ),
-                                )
-                            },
-                            onDelete = { update(model.copy(texts = model.texts.filterNot { it.id == textNote.id })) },
-                        )
+                    model.texts.forEach { textNote ->
+                        key(textNote.id) {
+                            WbTextNote(
+                                note = textNote,
+                                onMove = { dx, dy ->
+                                    update(
+                                        model.copy(
+                                            texts = model.texts.map {
+                                                if (it.id == textNote.id) it.copy(x = it.x + dx, y = it.y + dy) else it
+                                            },
+                                        ),
+                                    )
+                                },
+                                onText = { value ->
+                                    update(
+                                        model.copy(
+                                            texts = model.texts.map { if (it.id == textNote.id) it.copy(text = value) else it },
+                                        ),
+                                    )
+                                },
+                                onDelete = { update(model.copy(texts = model.texts.filterNot { it.id == textNote.id })) },
+                            )
+                        }
                     }
                 }
             }
@@ -305,7 +366,11 @@ internal fun ScribbleEditor(
 
             WbToolbar(
                 mode = mode,
+                penColor = penColor,
+                penWidth = penWidth,
                 onMode = { mode = it },
+                onPenWidth = { penWidth = it; mode = WbMode.DRAW },
+                onPenColor = { penColor = it; mode = WbMode.DRAW },
                 onUndo = { if (model.strokes.isNotEmpty()) update(model.copy(strokes = model.strokes.dropLast(1))) },
                 onClear = {
                     if (model.strokes.isNotEmpty() || model.texts.isNotEmpty()) {
@@ -325,9 +390,6 @@ internal fun ScribbleEditor(
 @Composable
 private fun WbTextNote(
     note: WbText,
-    scale: Float,
-    panX: Float,
-    panY: Float,
     onMove: (Float, Float) -> Unit,
     onText: (String) -> Unit,
     onDelete: () -> Unit,
@@ -335,7 +397,7 @@ private fun WbTextNote(
     val neu = LocalNeuColors.current
     Row(
         modifier = Modifier
-            .offset { IntOffset((note.x * scale + panX).roundToInt(), (note.y * scale + panY).roundToInt()) }
+            .offset { IntOffset(note.x.roundToInt(), note.y.roundToInt()) }
             .widthIn(max = 220.dp)
             .neumorphicRaised(12.dp, neu, elevation = 4.dp)
             .clip(RoundedCornerShape(12.dp))
@@ -400,7 +462,11 @@ private fun WbTextNote(
 @Composable
 private fun WbToolbar(
     mode: WbMode,
+    penColor: Int,
+    penWidth: Float,
     onMode: (WbMode) -> Unit,
+    onPenWidth: (Float) -> Unit,
+    onPenColor: (Int) -> Unit,
     onUndo: () -> Unit,
     onClear: () -> Unit,
     onResetView: () -> Unit,
@@ -416,13 +482,128 @@ private fun WbToolbar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        WbToolButton(Icons.Rounded.Draw, "Draw", selected = mode == WbMode.DRAW) { onMode(WbMode.DRAW) }
+        WbPenButton(
+            selected = mode == WbMode.DRAW,
+            penWidth = penWidth,
+            onSelect = { onMode(WbMode.DRAW) },
+            onPickWidth = onPenWidth,
+        )
+        WbColorButton(penColor = penColor, onPick = onPenColor)
         WbToolButton(Icons.Rounded.PanTool, "Move", selected = mode == WbMode.MOVE) { onMode(WbMode.MOVE) }
         WbToolButton(Icons.Rounded.TextFields, "Add text", selected = mode == WbMode.TEXT) { onMode(WbMode.TEXT) }
         WbDivider()
         WbToolButton(Icons.Rounded.Undo, "Undo", selected = false, onClick = onUndo)
         WbToolButton(Icons.Rounded.CenterFocusStrong, "Reset view", selected = false, onClick = onResetView)
         WbToolButton(Icons.Rounded.DeleteSweep, "Clear", selected = false, onClick = onClear)
+    }
+}
+
+/** Draw tool: tap to draw, long-press to choose the pen thickness. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WbPenButton(
+    selected: Boolean,
+    penWidth: Float,
+    onSelect: () -> Unit,
+    onPickWidth: (Float) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onSelect,
+                    onLongClick = { menu = true },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.Draw,
+                contentDescription = "Draw",
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            penPresets.forEach { preset ->
+                DropdownMenuItem(
+                    text = { Text(preset.label) },
+                    leadingIcon = {
+                        Box(
+                            modifier = Modifier
+                                .width(28.dp)
+                                .height(preset.width.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(MaterialTheme.colorScheme.onSurface),
+                        )
+                    },
+                    trailingIcon = {
+                        if (preset.width == penWidth) {
+                            Icon(Icons.Rounded.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                        }
+                    },
+                    onClick = {
+                        menu = false
+                        onPickWidth(preset.width)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** Pen colour: shows the current colour and opens a swatch row. */
+@Composable
+private fun WbColorButton(penColor: Int, onPick: (Int) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    val current = if (penColor == 0) MaterialTheme.colorScheme.onSurface else Color(penColor)
+    Box {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { menu = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(current)
+                    .border(1.5.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape),
+            )
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                penColors.forEach { c ->
+                    val swatch = if (c == 0) MaterialTheme.colorScheme.onSurface else Color(c)
+                    val isSelected = c == penColor
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(swatch)
+                            .border(
+                                width = if (isSelected) 3.dp else 1.dp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                shape = CircleShape,
+                            )
+                            .clickable {
+                                menu = false
+                                onPick(c)
+                            },
+                    )
+                }
+            }
+        }
     }
 }
 

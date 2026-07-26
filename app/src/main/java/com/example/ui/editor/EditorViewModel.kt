@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.di.AppContainer
 import com.example.domain.model.AttachmentMarkup
+import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Note
 import com.example.domain.model.NoteType
 import kotlinx.coroutines.Job
@@ -33,6 +34,12 @@ data class EditorUiState(
     val tags: List<String> = emptyList(),
     val folderId: String? = null,
     val saveStatus: SaveStatus = SaveStatus.Idle,
+    /** Template editor: when true this screen edits a reusable template, not a note. */
+    val templateMode: Boolean = false,
+    /** The template being edited ("new" when creating one), used to add vs update on save. */
+    val editingTemplateId: String? = null,
+    /** The icon key chosen for the template. */
+    val iconKey: String = "note",
 ) {
     val wordCount: Int
         get() = AttachmentMarkup.stripTokens(content).trim()
@@ -67,9 +74,31 @@ class EditorViewModel : ViewModel() {
     /** True only once the user has actually changed something in this session. */
     private var dirty = false
 
-    fun load(id: String?, template: String?, folderId: String? = null) {
+    fun load(id: String?, template: String?, folderId: String? = null, templateId: String? = null) {
         if (loaded) return
         loaded = true
+        // Template editor: draft a reusable template instead of a note.
+        if (templateId != null) {
+            if (templateId == "new") {
+                _state.value = EditorUiState(templateMode = true, editingTemplateId = "new")
+            } else {
+                viewModelScope.launch {
+                    val t = settings.customTemplates.first().find { it.id == templateId }
+                    _state.value = if (t != null) {
+                        EditorUiState(
+                            templateMode = true,
+                            editingTemplateId = t.id,
+                            title = t.name,
+                            content = t.content,
+                            iconKey = t.iconKey,
+                        )
+                    } else {
+                        EditorUiState(templateMode = true, editingTemplateId = "new")
+                    }
+                }
+            }
+            return
+        }
         if (id.isNullOrBlank()) {
             if (template != null && template.startsWith("custom:")) {
                 val templateId = template.removePrefix("custom:")
@@ -184,6 +213,8 @@ class EditorViewModel : ViewModel() {
     }
 
     private fun persistNow() {
+        // Template drafts are saved explicitly via saveTemplate(), never auto-saved as notes.
+        if (_state.value.templateMode) return
         // Never save a note the user hasn't actually touched (e.g. opening a template
         // and backing out, or opening an existing note and leaving unchanged).
         if (!dirty) return
@@ -218,6 +249,35 @@ class EditorViewModel : ViewModel() {
         autoSaveJob?.cancel()
         appScope.launch {
             if (persisted) repository.setTrashed(_state.value.id, true)
+        }
+        onDone()
+    }
+
+    // ---- Template editor ----
+    fun setTemplateIcon(key: String) {
+        _state.value = _state.value.copy(iconKey = key)
+    }
+
+    /** Whether the current template draft has enough to save (a non-blank name). */
+    val canSaveTemplate: Boolean get() = _state.value.templateMode && _state.value.title.isNotBlank()
+
+    /** Save the current draft as a template (add a new one, or update the one being edited). */
+    fun saveTemplate(onDone: () -> Unit) {
+        val s = _state.value
+        if (!s.templateMode || s.title.isBlank()) {
+            onDone()
+            return
+        }
+        val name = s.title.trim()
+        val icon = s.iconKey
+        val content = s.content
+        val editingId = s.editingTemplateId
+        appScope.launch {
+            if (editingId == null || editingId == "new") {
+                settings.addTemplate(CustomTemplate(name = name, iconKey = icon, content = content))
+            } else {
+                settings.updateTemplate(CustomTemplate(id = editingId, name = name, iconKey = icon, content = content))
+            }
         }
         onDone()
     }

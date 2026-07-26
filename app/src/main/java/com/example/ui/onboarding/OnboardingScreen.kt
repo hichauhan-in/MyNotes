@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -164,8 +165,12 @@ private fun OnboardingPageContent(page: OnboardingPage) {
             .fillMaxSize()
             .padding(horizontal = 36.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+        verticalArrangement = Arrangement.Top,
     ) {
+        // A fixed top offset (a share of the page height) keeps the icon and title at the SAME
+        // vertical position on every page, so swiping between pages never makes them jump even
+        // when one page's body text is longer than another's.
+        Spacer(Modifier.fillMaxHeight(0.16f))
         Box(
             modifier = Modifier
                 .size(120.dp)

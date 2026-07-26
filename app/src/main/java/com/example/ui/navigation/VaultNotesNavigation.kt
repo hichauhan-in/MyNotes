@@ -22,14 +22,20 @@ import com.example.ui.settings.SettingsViewModel
 
 private object Routes {
     const val HOME = "home"
-    const val EDITOR = "editor?noteId={noteId}&template={template}&folderId={folderId}"
+    const val EDITOR = "editor?noteId={noteId}&template={template}&folderId={folderId}&templateId={templateId}"
     const val SETTINGS = "settings"
 
-    fun editor(noteId: String? = null, template: String? = null, folderId: String? = null): String {
+    fun editor(
+        noteId: String? = null,
+        template: String? = null,
+        folderId: String? = null,
+        templateId: String? = null,
+    ): String {
         val params = buildList {
             if (noteId != null) add("noteId=$noteId")
             if (template != null) add("template=$template")
             if (folderId != null) add("folderId=$folderId")
+            if (templateId != null) add("templateId=$templateId")
         }
         return if (params.isEmpty()) "editor" else "editor?" + params.joinToString("&")
     }
@@ -67,6 +73,9 @@ fun MyNotesNavigation() {
                 onCreateNote = { template, folderId ->
                     navController.navigate(Routes.editor(template = template, folderId = folderId))
                 },
+                onEditTemplate = { templateId ->
+                    navController.navigate(Routes.editor(templateId = templateId))
+                },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
             )
         }
@@ -83,17 +92,22 @@ fun MyNotesNavigation() {
                 navArgument("folderId") {
                     type = NavType.StringType; nullable = true; defaultValue = null
                 },
+                navArgument("templateId") {
+                    type = NavType.StringType; nullable = true; defaultValue = null
+                },
             ),
         ) { backStackEntry ->
             val noteId = backStackEntry.arguments?.getString("noteId")
             val template = backStackEntry.arguments?.getString("template")
             val folderId = backStackEntry.arguments?.getString("folderId")
+            val templateId = backStackEntry.arguments?.getString("templateId")
             val viewModel: EditorViewModel = viewModel()
             EditorScreen(
                 viewModel = viewModel,
                 noteId = noteId,
                 template = template,
                 folderId = folderId,
+                templateId = templateId,
                 onNavigateBack = { navController.popBackStack() },
             )
         }

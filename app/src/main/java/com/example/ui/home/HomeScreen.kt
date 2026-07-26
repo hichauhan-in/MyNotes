@@ -7,8 +7,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -64,6 +62,7 @@ import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Archive
+import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
@@ -145,6 +144,7 @@ fun HomeScreen(
     viewModel: HomeViewModel,
     onNoteClick: (String) -> Unit,
     onCreateNote: (template: String?, folderId: String?) -> Unit,
+    onEditTemplate: (templateId: String) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -254,6 +254,23 @@ fun HomeScreen(
             }
 
             val currentBook = state.currentBook
+
+            // In Trash, the retention + empty-trash controls come first (right under the tabs),
+            // then the deleted books, then the loose notes.
+            if (selectedFilter == NoteFilter.TRASH && currentBook == null && !state.isEmpty) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Column {
+                        TrashBanner(
+                            retentionDays = retentionDays,
+                            onChangeRetention = { showRetentionSheet = true },
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        EmptyTrashButton(onClick = viewModel::emptyTrash)
+                        Spacer(Modifier.height(16.dp))
+                    }
+                }
+            }
+
             if (currentBook != null) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
@@ -285,20 +302,6 @@ fun HomeScreen(
                 }
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Spacer(Modifier.height(20.dp))
-                }
-            }
-
-            if (selectedFilter == NoteFilter.TRASH && !state.isEmpty) {
-                item(span = StaggeredGridItemSpan.FullLine) {
-                    Column {
-                        TrashBanner(
-                            retentionDays = retentionDays,
-                            onChangeRetention = { showRetentionSheet = true },
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        EmptyTrashButton(onClick = viewModel::emptyTrash)
-                        Spacer(Modifier.height(16.dp))
-                    }
                 }
             }
 
@@ -463,11 +466,13 @@ fun HomeScreen(
     if (showTemplateCreator) {
         TemplateManagerSheet(
             templates = customTemplates,
-            onCreate = { name, iconKey, content ->
-                viewModel.addCustomTemplate(name, iconKey, content)
+            onNew = {
+                showTemplateCreator = false
+                onEditTemplate("new")
             },
-            onUpdate = { id, name, iconKey, content ->
-                viewModel.updateCustomTemplate(id, name, iconKey, content)
+            onEdit = { id ->
+                showTemplateCreator = false
+                onEditTemplate(id)
             },
             onDelete = { viewModel.deleteCustomTemplate(it) },
             onDismiss = { showTemplateCreator = false },
@@ -1068,7 +1073,7 @@ private fun NoteCard(
                                 imageVector = when {
                                     note.isSheet -> Icons.Rounded.GridOn
                                     note.isExpense -> Icons.Rounded.AccountBalanceWallet
-                                    else -> Icons.Rounded.Gesture
+                                    else -> Icons.Rounded.Brush
                                 },
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
@@ -1188,8 +1193,8 @@ private fun ExpandableFab(
     ) {
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn() + slideInVertically { it / 2 } + scaleIn(initialScale = 0.8f),
-            exit = fadeOut() + slideOutVertically { it / 2 } + scaleOut(targetScale = 0.8f),
+            enter = fadeIn(),
+            exit = fadeOut(),
         ) {
             Column(horizontalAlignment = Alignment.End) {
                 FabAction("New book", Icons.Rounded.CreateNewFolder) { onCreateBook() }
@@ -1311,8 +1316,8 @@ private fun TemplatesFab(
     ) {
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn() + slideInVertically { it / 2 } + scaleIn(initialScale = 0.8f),
-            exit = fadeOut() + slideOutVertically { it / 2 } + scaleOut(targetScale = 0.8f),
+            enter = fadeIn(),
+            exit = fadeOut(),
         ) {
             Column(horizontalAlignment = Alignment.Start) {
                 templates.forEach { template ->
@@ -2077,25 +2082,12 @@ private fun templateIcon(key: String): ImageVector =
 @Composable
 private fun TemplateManagerSheet(
     templates: List<CustomTemplate>,
-    onCreate: (name: String, iconKey: String, content: String) -> Unit,
-    onUpdate: (id: String, name: String, iconKey: String, content: String) -> Unit,
-    onDelete: (id: String) -> Unit,
+    onNew: () -> Unit,
+    onEdit: (String) -> Unit,
+    onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var selectedTab by remember { mutableStateOf(0) }
-    var editingId by remember { mutableStateOf<String?>(null) }
-    var name by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
-    var iconKey by remember { mutableStateOf("note") }
-
-    fun resetForm() {
-        editingId = null
-        name = ""
-        content = ""
-        iconKey = "note"
-    }
-
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -2105,8 +2097,7 @@ private fun TemplateManagerSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 28.dp)
-                .imePadding(),
+                .padding(bottom = 24.dp),
         ) {
             Text(
                 text = "Templates",
@@ -2116,176 +2107,81 @@ private fun TemplateManagerSheet(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Reusable drafts. They appear on the templates button in the bottom-left corner.",
+                text = "Reusable drafts. Tap one to edit it, or create a new one below.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-
             Spacer(Modifier.height(16.dp))
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.primary,
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text(if (editingId != null) "Edit" else "New") },
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Manage (${templates.size})") },
-                )
-            }
-
-            Spacer(Modifier.height(18.dp))
-            // A bounded body that shrinks with the keyboard so the whole form stays reachable.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 240.dp, max = 460.dp),
+                    .heightIn(min = 150.dp, max = 420.dp),
             ) {
-                if (selectedTab == 0) {
+                if (templates.isEmpty()) {
+                    TemplatesEmptyState(modifier = Modifier.fillMaxSize())
+                } else {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(rememberScrollState()),
                     ) {
-                        TemplateLabel("Name")
-                        TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
-
-                        Spacer(Modifier.height(16.dp))
-                        TemplateLabel("Icon")
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            templateIconOptions.forEach { (key, icon) ->
-                                IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
-                            }
-                        }
-
-                        Spacer(Modifier.height(16.dp))
-                        TemplateLabel("Template text")
-                        TemplateBodyField(
-                            value = content,
-                            onValueChange = { content = it },
-                            placeholder = "Type your template…",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 140.dp, max = 240.dp),
-                        )
-
-                        Spacer(Modifier.height(16.dp))
-                        BrandGradientButton(
-                            text = if (editingId != null) "Update template" else "Save template",
-                            onClick = {
-                                if (name.isNotBlank()) {
-                                    val id = editingId
-                                    if (id != null) {
-                                        onUpdate(id, name.trim(), iconKey, content)
-                                    } else {
-                                        onCreate(name.trim(), iconKey, content)
-                                    }
-                                    resetForm()
-                                    selectedTab = 1
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        if (editingId != null) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = "Cancel edit",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        templates.forEach { template ->
+                            Row(
                                 modifier = Modifier
-                                    .align(Alignment.CenterHorizontally)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { resetForm() }
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                            )
-                        }
-                    }
-                } else {
-                    if (templates.isEmpty()) {
-                        TemplatesEmptyState(modifier = Modifier.fillMaxSize())
-                    } else {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState()),
-                        ) {
-                            templates.forEach { template ->
-                                Row(
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .clickable { onEdit(template.id) }
+                                    .padding(vertical = 10.dp, horizontal = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = templateIcon(template.iconKey),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(22.dp),
+                                )
+                                Spacer(Modifier.width(14.dp))
+                                Text(
+                                    text = template.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Icon(
+                                    imageVector = Icons.Rounded.Edit,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Box(
                                     modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .clickable { onDelete(template.id) },
+                                    contentAlignment = Alignment.Center,
                                 ) {
                                     Icon(
-                                        imageVector = templateIcon(template.iconKey),
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(22.dp),
+                                        imageVector = Icons.Rounded.Delete,
+                                        contentDescription = "Delete template",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp),
                                     )
-                                    Spacer(Modifier.width(14.dp))
-                                    Text(
-                                        text = template.name,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .clickable {
-                                                editingId = template.id
-                                                name = template.name
-                                                iconKey = template.iconKey
-                                                content = template.content
-                                                selectedTab = 0
-                                            },
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Edit,
-                                            contentDescription = "Edit template",
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    }
-                                    Spacer(Modifier.width(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .size(32.dp)
-                                            .clip(CircleShape)
-                                            .clickable {
-                                                if (editingId == template.id) resetForm()
-                                                onDelete(template.id)
-                                            },
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Delete,
-                                            contentDescription = "Delete template",
-                                            tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
+            BrandGradientButton(
+                text = "New template",
+                icon = Icons.Rounded.Add,
+                onClick = onNew,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -2322,7 +2218,7 @@ private fun TemplatesEmptyState(modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Create one in the New tab and it'll appear here.",
+            text = "Tap “New template” to draft one, then it'll appear here.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,

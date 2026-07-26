@@ -104,6 +104,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -143,6 +144,8 @@ import com.example.domain.model.Checklist as ChecklistUtil
 import com.example.domain.model.ChecklistItem
 import com.example.domain.model.NoteType
 import com.example.ui.components.NeuIconButton
+import com.example.ui.components.BrandGradientButton
+import com.example.ui.components.TemplateIcons
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.NoteAccents
 import com.example.ui.theme.neumorphicRaised
@@ -161,9 +164,10 @@ fun EditorScreen(
     noteId: String?,
     template: String? = null,
     folderId: String? = null,
+    templateId: String? = null,
     onNavigateBack: () -> Unit,
 ) {
-    LaunchedEffect(Unit) { viewModel.load(noteId, template, folderId) }
+    LaunchedEffect(Unit) { viewModel.load(noteId, template, folderId, templateId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
@@ -396,6 +400,7 @@ fun EditorScreen(
             saveStatus = state.saveStatus,
             isPinned = state.isPinned,
             isFavorite = state.isFavorite,
+            templateMode = state.templateMode,
             onBack = { leave() },
             onTogglePin = viewModel::togglePin,
             onToggleFavorite = viewModel::toggleFavorite,
@@ -457,7 +462,7 @@ fun EditorScreen(
                 decorationBox = { inner ->
                     if (titleField.text.isEmpty()) {
                         Text(
-                            text = "Title",
+                            text = if (state.templateMode) "Template name" else "Title",
                             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                         )
@@ -468,20 +473,27 @@ fun EditorScreen(
             )
 
             Spacer(Modifier.height(10.dp))
-            if (state.type == NoteType.CHECKLIST) {
-                ChecklistProgress(
-                    done = checklistItems.count { it.checked && it.text.isNotBlank() },
-                    total = checklistItems.count { it.text.isNotBlank() },
+            if (state.templateMode) {
+                TemplateIconRow(
+                    selected = state.iconKey,
+                    onSelect = viewModel::setTemplateIcon,
                 )
             } else {
-                EditorMeta(
-                    words = state.wordCount,
-                    readingMinutes = state.readingMinutes,
-                )
-            }
+                if (state.type == NoteType.CHECKLIST) {
+                    ChecklistProgress(
+                        done = checklistItems.count { it.checked && it.text.isNotBlank() },
+                        total = checklistItems.count { it.text.isNotBlank() },
+                    )
+                } else {
+                    EditorMeta(
+                        words = state.wordCount,
+                        readingMinutes = state.readingMinutes,
+                    )
+                }
 
-            Spacer(Modifier.height(12.dp))
-            TagRow(tags = state.tags, onEdit = { showTagSheet = true })
+                Spacer(Modifier.height(12.dp))
+                TagRow(tags = state.tags, onEdit = { showTagSheet = true })
+            }
 
             Spacer(Modifier.height(16.dp))
             if (state.type == NoteType.CHECKLIST) {
@@ -563,6 +575,16 @@ fun EditorScreen(
                 }
             }
             Spacer(Modifier.height(24.dp))
+        }
+
+        if (state.templateMode) {
+            SaveTemplateBar(
+                enabled = state.title.isNotBlank(),
+                onSave = {
+                    focusManager.clearFocus(force = true)
+                    viewModel.saveTemplate { onNavigateBack() }
+                },
+            )
         }
 
         if (state.type != NoteType.CHECKLIST) {
@@ -681,6 +703,7 @@ private fun EditorTopBar(
     saveStatus: SaveStatus,
     isPinned: Boolean,
     isFavorite: Boolean,
+    templateMode: Boolean,
     onBack: () -> Unit,
     onTogglePin: () -> Unit,
     onToggleFavorite: () -> Unit,
@@ -701,37 +724,106 @@ private fun EditorTopBar(
             size = 44.dp,
         )
         Spacer(Modifier.width(12.dp))
-        SaveStatusPill(saveStatus)
-        Spacer(Modifier.weight(1f))
-        NeuIconButton(
-            icon = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-            contentDescription = "Favorite",
-            onClick = onToggleFavorite,
-            size = 44.dp,
-            tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+        if (templateMode) {
+            Text(
+                text = "Template",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.weight(1f))
+        } else {
+            SaveStatusPill(saveStatus)
+            Spacer(Modifier.weight(1f))
+            NeuIconButton(
+                icon = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                contentDescription = "Favorite",
+                onClick = onToggleFavorite,
+                size = 44.dp,
+                tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(10.dp))
+            NeuIconButton(
+                icon = Icons.Rounded.PushPin,
+                contentDescription = "Pin",
+                onClick = onTogglePin,
+                size = 44.dp,
+                tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.width(10.dp))
+            NeuIconButton(
+                icon = Icons.Rounded.Palette,
+                contentDescription = "Note colour",
+                onClick = onColor,
+                size = 44.dp,
+            )
+            Spacer(Modifier.width(10.dp))
+            NeuIconButton(
+                icon = Icons.Rounded.Delete,
+                contentDescription = "Move to Trash",
+                onClick = onDelete,
+                size = 44.dp,
+                tint = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+/** Horizontal icon picker shown when drafting a template. */
+@Composable
+private fun TemplateIconRow(selected: String, onSelect: (String) -> Unit) {
+    Column {
+        Text(
+            text = "Icon",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.width(10.dp))
-        NeuIconButton(
-            icon = Icons.Rounded.PushPin,
-            contentDescription = "Pin",
-            onClick = onTogglePin,
-            size = 44.dp,
-            tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.width(10.dp))
-        NeuIconButton(
-            icon = Icons.Rounded.Palette,
-            contentDescription = "Note colour",
-            onClick = onColor,
-            size = 44.dp,
-        )
-        Spacer(Modifier.width(10.dp))
-        NeuIconButton(
-            icon = Icons.Rounded.Delete,
-            contentDescription = "Move to Trash",
-            onClick = onDelete,
-            size = 44.dp,
-            tint = MaterialTheme.colorScheme.error,
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            TemplateIcons.options.forEach { (key, icon) ->
+                val isSelected = key == selected
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isSelected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant,
+                        )
+                        .clickable { onSelect(key) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The always-visible "Save as template" action, sitting just above the formatting toolbar. */
+@Composable
+private fun SaveTemplateBar(enabled: Boolean, onSave: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+    ) {
+        BrandGradientButton(
+            text = "Save as template",
+            onClick = { if (enabled) onSave() },
+            modifier = Modifier
+                .fillMaxWidth()
+                .alpha(if (enabled) 1f else 0.5f),
         )
     }
 }
