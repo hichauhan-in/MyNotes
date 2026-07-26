@@ -3,6 +3,8 @@ package com.example.ui.home
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
@@ -49,6 +51,9 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Alarm
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Flight
@@ -105,6 +110,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -122,8 +128,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import coil.compose.AsyncImage
 import com.example.data.attachments.AttachmentStore
+import com.example.data.export.ExportFormat
+import com.example.data.export.ExportIO
+import com.example.data.export.Exporter
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Folder
 import com.example.domain.model.Note
@@ -158,6 +170,14 @@ fun HomeScreen(
     val selectionMode = selectedIds.isNotEmpty()
     val retentionDays by viewModel.trashRetentionDays.collectAsStateWithLifecycle()
     val customTemplates by viewModel.customTemplates.collectAsStateWithLifecycle()
+    val trashedTemplates by viewModel.trashedTemplates.collectAsStateWithLifecycle()
+    val selectedBookIds by viewModel.selectedBookIds.collectAsStateWithLifecycle()
+    val bookSelectionMode = selectedBookIds.isNotEmpty()
+    val hasTrashedTemplates = trashedTemplates.isNotEmpty()
+    val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
+    val allNotesForExport by viewModel.notesForExport.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var fabExpanded by remember { mutableStateOf(false) }
     var templatesExpanded by remember { mutableStateOf(false) }
     var actionNote by remember { mutableStateOf<Note?>(null) }
@@ -172,6 +192,10 @@ fun HomeScreen(
     var moveBookFor by remember { mutableStateOf<Folder?>(null) }
     var deleteBookFor by remember { mutableStateOf<Folder?>(null) }
     var deleteBookForeverFor by remember { mutableStateOf<Folder?>(null) }
+    var showMoveBookSelection by remember { mutableStateOf(false) }
+    var showDeleteBooksForeverDialog by remember { mutableStateOf(false) }
+    var exportBookFor by remember { mutableStateOf<Folder?>(null) }
+    var pendingBookExport by remember { mutableStateOf<Pair<String, ExportFormat>?>(null) }
 
     val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
     val foldersById = remember(allFolders) { allFolders.associateBy { it.id } }
@@ -184,14 +208,66 @@ fun HomeScreen(
 
     // Back exits selection, then steps out of a book, before leaving the screen.
     BackHandler(enabled = selectionMode) { viewModel.clearSelection() }
-    BackHandler(enabled = !selectionMode && state.currentBook != null) { viewModel.goUp() }
+    BackHandler(enabled = bookSelectionMode) { viewModel.clearBookSelection() }
+    BackHandler(enabled = !selectionMode && !bookSelectionMode && state.currentBook != null) { viewModel.goUp() }
+
+    val exportBookLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("*/*"),
+    ) { uri ->
+        val pending = pendingBookExport
+        pendingBookExport = null
+        if (uri != null && pending != null) {
+            val (rootId, format) = pending
+            val folders = allFolders
+            val notes = allNotesForExport
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    ExportIO.writeStream(context, uri) { out ->
+                        Exporter.writeBookZip(context, rootId, folders, notes, format, out)
+                    }
+                }
+                android.widget.Toast.makeText(
+                    context,
+                    if (ok) "Book exported" else "Couldn't export",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    fun exportBook(book: Folder, format: ExportFormat) {
+        val fileName = "${Exporter.safe(book.name)}.zip"
+        val folders = allFolders
+        val notes = allNotesForExport
+        val folder = defaultExportFolder
+        if (folder != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    val target = ExportIO.createInTree(context, folder, fileName, "application/zip")
+                    target != null && ExportIO.writeStream(context, target) { out ->
+                        Exporter.writeBookZip(context, book.id, folders, notes, format, out)
+                    }
+                }
+                if (ok) {
+                    android.widget.Toast.makeText(context, "Book exported to your folder", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    pendingBookExport = book.id to format
+                    runCatching { exportBookLauncher.launch(fileName) }
+                }
+            }
+        } else {
+            pendingBookExport = book.id to format
+            runCatching { exportBookLauncher.launch(fileName) }
+        }
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
     ) {
-        if (state.isEmpty && !state.loading && !selectionMode) {
+        if (state.isEmpty && !state.loading && !selectionMode && !bookSelectionMode &&
+            !(selectedFilter == NoteFilter.TRASH && hasTrashedTemplates)) {
             EmptyHomeContent(
                 insets = insets,
                 noteCount = state.totalNotes,
@@ -218,6 +294,7 @@ fun HomeScreen(
             verticalItemSpacing = 14.dp,
         ) {
             item(span = StaggeredGridItemSpan.FullLine) {
+                val bookIds = state.books.map { it.folder.id }
                 if (selectionMode) {
                     SelectionTopBar(
                         count = selectedIds.size,
@@ -226,6 +303,16 @@ fun HomeScreen(
                         onToggleSelectAll = {
                             if (selectedIds.size >= visibleIds.size) viewModel.clearSelection()
                             else viewModel.selectAll(visibleIds)
+                        },
+                    )
+                } else if (bookSelectionMode) {
+                    SelectionTopBar(
+                        count = selectedBookIds.size,
+                        allSelected = bookIds.isNotEmpty() && selectedBookIds.size >= bookIds.size,
+                        onClose = viewModel::clearBookSelection,
+                        onToggleSelectAll = {
+                            if (selectedBookIds.size >= bookIds.size) viewModel.clearBookSelection()
+                            else viewModel.selectAllBooks(bookIds)
                         },
                     )
                 } else {
@@ -260,7 +347,7 @@ fun HomeScreen(
 
             // In Trash, the retention + empty-trash controls come first (right under the tabs),
             // then the deleted books, then the loose notes.
-            if (selectedFilter == NoteFilter.TRASH && currentBook == null && !state.isEmpty) {
+            if (selectedFilter == NoteFilter.TRASH && currentBook == null && (!state.isEmpty || hasTrashedTemplates)) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
                         TrashBanner(
@@ -299,12 +386,38 @@ fun HomeScreen(
                 items(state.books, key = { "book_${it.folder.id}" }) { book ->
                     BookCard(
                         book = book,
+                        selected = book.folder.id in selectedBookIds,
+                        selectionMode = bookSelectionMode,
                         onOpen = { viewModel.openBook(book.folder.id) },
+                        onToggleSelect = { viewModel.toggleBookSelection(book.folder.id) },
                         onOptions = { bookActionsFor = book.folder },
                     )
                 }
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Spacer(Modifier.height(20.dp))
+                }
+            }
+
+            // Deleted templates get their own Trash section, recoverable within the retention window.
+            if (selectedFilter == NoteFilter.TRASH && currentBook == null && hasTrashedTemplates) {
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Column {
+                        SectionHeader(title = "Deleted templates")
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                trashedTemplates.forEach { template ->
+                    item(span = StaggeredGridItemSpan.FullLine, key = "tpl_${template.id}") {
+                        TrashedTemplateRow(
+                            template = template,
+                            onRestore = { viewModel.restoreTemplate(template.id) },
+                            onDeleteForever = { viewModel.deleteTemplateForever(template.id) },
+                        )
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+                item(span = StaggeredGridItemSpan.FullLine) {
+                    Spacer(Modifier.height(8.dp))
                 }
             }
 
@@ -358,7 +471,7 @@ fun HomeScreen(
         // already reads well and a heavier one would needlessly hide them.
         val fabScrimAlpha = if (state.isEmpty) 0.66f else 0.32f
         AnimatedVisibility(
-            visible = (fabExpanded || templatesExpanded) && !selectionMode,
+            visible = (fabExpanded || templatesExpanded) && !selectionMode && !bookSelectionMode,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
@@ -376,7 +489,7 @@ fun HomeScreen(
             )
         }
 
-        if (!selectionMode) {
+        if (!selectionMode && !bookSelectionMode) {
             TemplatesFab(
                 expanded = templatesExpanded,
                 onToggle = {
@@ -433,6 +546,25 @@ fun HomeScreen(
                 onRestore = viewModel::bulkRestore,
                 onDeleteForever = viewModel::bulkDeleteForever,
                 onMove = { showMoveSelection = true },
+                modifier = Modifier
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = insets.calculateBottomPadding() + 20.dp),
+            )
+        }
+
+        // Contextual bulk-action bar while multiple books are selected.
+        AnimatedVisibility(
+            visible = bookSelectionMode,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            BookSelectionActionBar(
+                inTrash = selectedFilter == NoteFilter.TRASH,
+                onMove = { showMoveBookSelection = true },
+                onDelete = { viewModel.bulkTrashBooks() },
+                onRestore = { viewModel.bulkRestoreBooks() },
+                onDeleteForever = { showDeleteBooksForeverDialog = true },
                 modifier = Modifier
                     .padding(horizontal = 20.dp)
                     .padding(bottom = insets.calculateBottomPadding() + 20.dp),
@@ -548,6 +680,41 @@ fun HomeScreen(
         )
     }
 
+    if (showMoveBookSelection) {
+        FolderPickerSheet(
+            title = "Move books into",
+            folders = activeFolders,
+            excludeSubtrees = selectedBookIds,
+            onSelect = {
+                viewModel.bulkMoveBooks(it)
+                showMoveBookSelection = false
+            },
+            onDismiss = { showMoveBookSelection = false },
+        )
+    }
+
+    if (showDeleteBooksForeverDialog) {
+        DeleteBooksForeverDialog(
+            count = selectedBookIds.size,
+            onConfirm = {
+                viewModel.bulkDeleteBooksForever()
+                showDeleteBooksForeverDialog = false
+            },
+            onDismiss = { showDeleteBooksForeverDialog = false },
+        )
+    }
+
+    exportBookFor?.let { book ->
+        BookExportSheet(
+            bookName = book.name,
+            onPick = { format ->
+                exportBookFor = null
+                exportBook(book, format)
+            },
+            onDismiss = { exportBookFor = null },
+        )
+    }
+
     bookActionsFor?.let { book ->
         BookActionsSheet(
             book = book,
@@ -571,6 +738,10 @@ fun HomeScreen(
             onDeleteForever = {
                 bookActionsFor = null
                 deleteBookForeverFor = book
+            },
+            onExport = {
+                bookActionsFor = null
+                exportBookFor = book
             },
             onDismiss = { bookActionsFor = null },
         )
@@ -791,6 +962,126 @@ private fun SelectionActionItem(
         Spacer(Modifier.height(4.dp))
         Text(label, style = MaterialTheme.typography.labelMedium, color = tint)
     }
+}
+
+@Composable
+private fun BookSelectionActionBar(
+    inTrash: Boolean,
+    onMove: () -> Unit,
+    onDelete: () -> Unit,
+    onRestore: () -> Unit,
+    onDeleteForever: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    NeuSurface(
+        cornerRadius = 26.dp,
+        elevation = 10.dp,
+        contentPadding = PaddingValues(vertical = 12.dp, horizontal = 6.dp),
+        modifier = modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceAround,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (inTrash) {
+                SelectionActionItem(Icons.Rounded.Restore, "Restore", onRestore)
+                SelectionActionItem(Icons.Rounded.DeleteForever, "Delete", onDeleteForever, destructive = true)
+            } else {
+                SelectionActionItem(Icons.Rounded.Folder, "Move", onMove)
+                SelectionActionItem(Icons.Rounded.Delete, "Delete", onDelete, destructive = true)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrashedTemplateRow(
+    template: CustomTemplate,
+    onRestore: () -> Unit,
+    onDeleteForever: () -> Unit,
+) {
+    val neu = LocalNeuColors.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .neumorphicRaised(18.dp, neu, elevation = 4.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(start = 14.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = templateIcon(template.iconKey),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(22.dp),
+        )
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                text = template.name.ifBlank { "Untitled template" },
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            template.trashedAt?.let {
+                Text(
+                    text = "Deleted ${relativeTime(it)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Box(
+            modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onRestore),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.Restore,
+                contentDescription = "Restore template",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        Box(
+            modifier = Modifier.size(40.dp).clip(CircleShape).clickable(onClick = onDeleteForever),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.DeleteForever,
+                contentDescription = "Delete forever",
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun DeleteBooksForeverDialog(
+    count: Int,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+        title = { Text(if (count == 1) "Delete book forever?" else "Delete $count books forever?") },
+        text = {
+            Text(
+                "This permanently removes the selected ${if (count == 1) "book" else "books"} and " +
+                    "everything nested inside. This can't be undone.",
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
@@ -1675,63 +1966,81 @@ private fun RetentionPickerSheet(
 @Composable
 private fun BookCard(
     book: BookItem,
+    selected: Boolean,
+    selectionMode: Boolean,
     onOpen: () -> Unit,
+    onToggleSelect: () -> Unit,
     onOptions: () -> Unit,
 ) {
-    NeuCard(
-        onClick = onOpen,
-        onLongClick = onOptions,
-        cornerRadius = 22.dp,
-        contentPadding = PaddingValues(16.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(brandGradientHorizontal()),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MenuBook,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp),
-                    )
+    Box(modifier = Modifier.fillMaxWidth()) {
+        NeuCard(
+            onClick = { if (selectionMode) onToggleSelect() else onOpen() },
+            onLongClick = onToggleSelect,
+            cornerRadius = 22.dp,
+            contentPadding = PaddingValues(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(brandGradientHorizontal()),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MenuBook,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                    Spacer(Modifier.weight(1f))
+                    if (!selectionMode) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onOptions),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.MoreVert,
+                                contentDescription = "Book options",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
                 }
-                Spacer(Modifier.weight(1f))
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .clip(CircleShape)
-                        .clickable(onClick = onOptions),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Book options",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = book.folder.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = bookSubtitle(book),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                text = book.folder.name,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        }
+        if (selected) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(22.dp))
+                    .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(22.dp)),
             )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = bookSubtitle(book),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        }
+        if (selectionMode) {
+            SelectionBadge(selected = selected, modifier = Modifier.align(Alignment.TopEnd))
         }
     }
 }
@@ -1839,17 +2148,20 @@ private fun BookNameDialog(
 
 private data class FolderRow(val folder: Folder, val depth: Int)
 
-private fun flattenFolders(all: List<Folder>, excludeSubtreeOf: String?): List<FolderRow> {
+private fun flattenFolders(
+    all: List<Folder>,
+    excludeSubtreeOf: String?,
+    excludeSubtrees: Set<String> = emptySet(),
+): List<FolderRow> {
     val childrenOf = all.groupBy { it.parentId }
     val excluded = mutableSetOf<String>()
-    if (excludeSubtreeOf != null) {
-        val stack = ArrayDeque<String>()
-        stack.add(excludeSubtreeOf)
-        while (stack.isNotEmpty()) {
-            val id = stack.removeLast()
-            if (excluded.add(id)) {
-                childrenOf[id].orEmpty().forEach { stack.add(it.id) }
-            }
+    val stack = ArrayDeque<String>()
+    if (excludeSubtreeOf != null) stack.add(excludeSubtreeOf)
+    excludeSubtrees.forEach { stack.add(it) }
+    while (stack.isNotEmpty()) {
+        val id = stack.removeLast()
+        if (excluded.add(id)) {
+            childrenOf[id].orEmpty().forEach { stack.add(it.id) }
         }
     }
     val result = mutableListOf<FolderRow>()
@@ -1872,9 +2184,12 @@ private fun FolderPickerSheet(
     onSelect: (String?) -> Unit,
     onDismiss: () -> Unit,
     excludeSubtreeOf: String? = null,
+    excludeSubtrees: Set<String> = emptySet(),
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val rows = remember(folders, excludeSubtreeOf) { flattenFolders(folders, excludeSubtreeOf) }
+    val rows = remember(folders, excludeSubtreeOf, excludeSubtrees) {
+        flattenFolders(folders, excludeSubtreeOf, excludeSubtrees)
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -1948,6 +2263,7 @@ private fun BookActionsSheet(
     onDelete: () -> Unit,
     onRestore: () -> Unit,
     onDeleteForever: () -> Unit,
+    onExport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -1984,6 +2300,7 @@ private fun BookActionsSheet(
             } else {
                 SheetAction(Icons.Rounded.Edit, "Rename") { onRename() }
                 SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
+                SheetAction(Icons.Rounded.FileDownload, "Export book") { onExport() }
                 SheetAction(Icons.Rounded.Delete, "Delete book", destructive = true) { onDelete() }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -1993,6 +2310,49 @@ private fun BookActionsSheet(
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BookExportSheet(
+    bookName: String,
+    onPick: (ExportFormat) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Export \"$bookName\"",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Saved as a ZIP that keeps the book's folder structure and attachments. " +
+                    "Pick the format for the notes inside.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            SheetAction(Icons.Rounded.PictureAsPdf, "Notes as PDF") { onPick(ExportFormat.PDF) }
+            SheetAction(Icons.Rounded.Description, "Notes as Markdown") { onPick(ExportFormat.MD) }
+            SheetAction(Icons.Rounded.Description, "Notes as plain text") { onPick(ExportFormat.TXT) }
+            SheetAction(Icons.Rounded.Code, "Notes as web pages") { onPick(ExportFormat.HTML) }
         }
     }
 }
@@ -2358,6 +2718,8 @@ private fun IconChoice(icon: ImageVector, selected: Boolean, onClick: () -> Unit
 
 // ---- helpers -------------------------------------------------------------------
 
+private val monthDayFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+
 private fun relativeTime(millis: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - millis
@@ -2367,7 +2729,7 @@ private fun relativeTime(millis: Long): String {
         diff < TimeUnit.DAYS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toHours(diff)}h ago"
         diff < TimeUnit.DAYS.toMillis(2) -> "Yesterday"
         diff < TimeUnit.DAYS.toMillis(7) -> "${TimeUnit.MILLISECONDS.toDays(diff)}d ago"
-        else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(millis)
+        else -> monthDayFormat.format(millis)
     }
 }
 

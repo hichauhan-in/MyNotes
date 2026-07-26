@@ -6,6 +6,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -14,12 +15,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.Add
@@ -99,7 +101,6 @@ private fun defaultExpense(): ExpenseModel = ExpenseModel(
         ExpenseSection(UUID.randomUUID().toString(), "Expenses", "expense", SectionKind.ALLOCATION, emptyList()),
         ExpenseSection(UUID.randomUUID().toString(), "Savings", "savings", SectionKind.ALLOCATION, emptyList()),
         ExpenseSection(UUID.randomUUID().toString(), "Investments", "invest", SectionKind.ALLOCATION, emptyList()),
-        ExpenseSection(UUID.randomUUID().toString(), "Accounts", "account", SectionKind.ACCOUNT, emptyList()),
     ),
 )
 
@@ -206,11 +207,11 @@ private val sectionIconOptions: List<Pair<String, ImageVector>> = listOf(
 private fun sectionIcon(key: String): ImageVector =
     sectionIconOptions.firstOrNull { it.first == key }?.second ?: Icons.Rounded.Category
 
-private fun formatMoney(v: Double): String {
-    val nf = NumberFormat.getNumberInstance(Locale.US)
-    nf.maximumFractionDigits = 2
-    return "₹" + nf.format(v)
+private val moneyFormat: NumberFormat = NumberFormat.getNumberInstance(Locale.US).apply {
+    maximumFractionDigits = 2
 }
+
+private fun formatMoney(v: Double): String = "₹" + moneyFormat.format(v)
 
 private fun plainAmount(v: Double): String =
     if (v == 0.0) "" else if (v % 1.0 == 0.0) v.toLong().toString() else v.toString()
@@ -228,6 +229,7 @@ internal fun ExpenseEditor(
     onTitleChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    meta: @Composable () -> Unit = {},
 ) {
     var model by remember { mutableStateOf(parseExpense(content)) }
     LaunchedEffect(seedKey) { model = parseExpense(content) }
@@ -261,125 +263,128 @@ internal fun ExpenseEditor(
         .toMap()
     fun colorFor(section: ExpenseSection): Color = allocColorById[section.id] ?: accountColor
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 16.dp),
     ) {
-        Spacer(Modifier.height(8.dp))
-        BasicTextField(
-            value = title,
-            onValueChange = onTitleChange,
-            textStyle = MaterialTheme.typography.headlineSmall.copy(
-                color = MaterialTheme.colorScheme.onBackground,
-                fontWeight = FontWeight.Bold,
-            ),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            singleLine = true,
-            decorationBox = { inner ->
-                if (title.isEmpty()) {
-                    Text(
-                        text = "e.g. July salary",
-                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                    )
-                }
-                inner()
-            },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(16.dp))
-
-        // Income
-        ExpenseCard {
-            Text(
-                text = "Income this month",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+        item {
             Spacer(Modifier.height(8.dp))
-            MoneyField(
-                value = model.income,
-                onChange = { update(model.copy(income = it)) },
-                textStyle = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+            BasicTextField(
+                value = title,
+                onValueChange = onTitleChange,
+                textStyle = MaterialTheme.typography.headlineSmall.copy(
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Bold,
+                ),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                singleLine = true,
+                readOnly = LocalReadOnly.current,
+                decorationBox = { inner ->
+                    if (title.isEmpty()) {
+                        Text(
+                            text = "e.g. July salary",
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        )
+                    }
+                    inner()
+                },
+                modifier = Modifier.fillMaxWidth(),
             )
-        }
+            Spacer(Modifier.height(12.dp))
+            meta()
+            Spacer(Modifier.height(16.dp))
 
-        Spacer(Modifier.height(14.dp))
-
-        // Summary
-        ExpenseCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = if (remaining >= 0) "Unallocated" else "Over-allocated",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        text = formatMoney(kotlin.math.abs(remaining)),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = if (remaining >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                    )
-                }
+            // Income
+            ExpenseCard {
                 Text(
-                    text = "of ${formatMoney(model.income)}",
-                    style = MaterialTheme.typography.bodySmall,
+                    text = "Income this month",
+                    style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            Spacer(Modifier.height(12.dp))
-            AllocationBar(
-                income = model.income,
-                allocated = allocationTotal,
-                segments = allocationSections.map { s -> s.items.sumOf { it.amount } to colorFor(s) },
-            )
-            if (allocationSections.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                allocationSections.forEach { s ->
-                    LegendRow(
-                        label = s.name.ifBlank { "Untitled" },
-                        amount = s.items.sumOf { it.amount },
-                        color = colorFor(s),
-                    )
-                }
-            }
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        model.sections.forEach { section ->
-            key(section.id) {
-                SectionCard(
-                    section = section,
-                    accent = colorFor(section),
-                    onRename = { newName -> updateSection(section.id) { it.copy(name = newName) } },
-                    onAddItem = { updateSection(section.id) { it.copy(items = it.items + newItem()) } },
-                    onItemName = { itemId, v ->
-                        updateSection(section.id) { s ->
-                            s.copy(items = s.items.map { if (it.id == itemId) it.copy(name = v) else it })
-                        }
-                    },
-                    onItemAmount = { itemId, v ->
-                        updateSection(section.id) { s ->
-                            s.copy(items = s.items.map { if (it.id == itemId) it.copy(amount = v) else it })
-                        }
-                    },
-                    onDeleteItem = { itemId ->
-                        updateSection(section.id) { s -> s.copy(items = s.items.filterNot { it.id == itemId }) }
-                    },
-                    onRemoveSection = {
-                        update(model.copy(sections = model.sections.filterNot { it.id == section.id }))
-                    },
+                Spacer(Modifier.height(8.dp))
+                MoneyField(
+                    value = model.income,
+                    onChange = { update(model.copy(income = it)) },
+                    textStyle = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                 )
             }
+
+            Spacer(Modifier.height(14.dp))
+
+            // Summary
+            ExpenseCard {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = if (remaining >= 0) "Unallocated" else "Over-allocated",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = formatMoney(kotlin.math.abs(remaining)),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = if (remaining >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Text(
+                        text = "of ${formatMoney(model.income)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                AllocationBar(
+                    income = model.income,
+                    allocated = allocationTotal,
+                    segments = allocationSections.map { s -> s.items.sumOf { it.amount } to colorFor(s) },
+                )
+                if (allocationSections.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    allocationSections.forEach { s ->
+                        LegendRow(
+                            label = s.name.ifBlank { "Untitled" },
+                            amount = s.items.sumOf { it.amount },
+                            color = colorFor(s),
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(14.dp))
         }
 
-        AddSectionButton(onClick = { showAddSection = true })
-        Spacer(Modifier.height(28.dp))
+        items(model.sections, key = { it.id }) { section ->
+            SectionCard(
+                section = section,
+                accent = colorFor(section),
+                onRename = { newName -> updateSection(section.id) { it.copy(name = newName) } },
+                onAddItem = { updateSection(section.id) { it.copy(items = it.items + newItem()) } },
+                onItemName = { itemId, v ->
+                    updateSection(section.id) { s ->
+                        s.copy(items = s.items.map { if (it.id == itemId) it.copy(name = v) else it })
+                    }
+                },
+                onItemAmount = { itemId, v ->
+                    updateSection(section.id) { s ->
+                        s.copy(items = s.items.map { if (it.id == itemId) it.copy(amount = v) else it })
+                    }
+                },
+                onDeleteItem = { itemId ->
+                    updateSection(section.id) { s -> s.copy(items = s.items.filterNot { it.id == itemId }) }
+                },
+                onRemoveSection = {
+                    update(model.copy(sections = model.sections.filterNot { it.id == section.id }))
+                },
+            )
+            Spacer(Modifier.height(14.dp))
+        }
+
+        item {
+            AddSectionButton(onClick = { showAddSection = true })
+            Spacer(Modifier.height(28.dp))
+        }
     }
 
     if (showAddSection) {
@@ -484,6 +489,7 @@ private fun SectionNameField(value: String, onChange: (String) -> Unit, modifier
                 fontWeight = FontWeight.Bold,
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            readOnly = LocalReadOnly.current,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -497,7 +503,7 @@ private fun SectionMenu(onRemove: () -> Unit) {
             modifier = Modifier
                 .size(30.dp)
                 .clip(CircleShape)
-                .clickable { open = true },
+                .clickable(enabled = !LocalReadOnly.current) { open = true },
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -535,7 +541,7 @@ private fun AddSectionButton(onClick: () -> Unit) {
                 .neumorphicRaised(26.dp, neu, elevation = 6.dp)
                 .clip(RoundedCornerShape(26.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .clickable(onClick = onClick)
+                .clickable(enabled = !LocalReadOnly.current, onClick = onClick)
                 .padding(start = 8.dp, end = 22.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -778,7 +784,7 @@ private fun AddRow(onAdd: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onAdd)
+            .clickable(enabled = !LocalReadOnly.current, onClick = onAdd)
             .padding(vertical = 6.dp, horizontal = 2.dp),
     ) {
         Icon(
@@ -803,7 +809,7 @@ private fun DeleteDot(onClick: () -> Unit) {
         modifier = Modifier
             .size(28.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(enabled = !LocalReadOnly.current, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -836,6 +842,7 @@ private fun PlainField(
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            readOnly = LocalReadOnly.current,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -871,6 +878,7 @@ private fun MoneyField(
                 textStyle = textStyle.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                readOnly = LocalReadOnly.current,
             )
         }
     }

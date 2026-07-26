@@ -1,5 +1,7 @@
 package com.example.domain.model
 
+import androidx.compose.runtime.Immutable
+
 /** The kind of note: free text, an interactive checklist, a spreadsheet, an expense tracker, or a whiteboard. */
 enum class NoteType { TEXT, CHECKLIST, SHEET, EXPENSE, SCRIBBLE }
 
@@ -7,6 +9,7 @@ enum class NoteType { TEXT, CHECKLIST, SHEET, EXPENSE, SCRIBBLE }
  * Decrypted, in-memory representation of a note. Instances of this class only ever
  * exist in RAM - everything written to disk is encrypted (see NoteEntity).
  */
+@Immutable
 data class Note(
     val id: String,
     val title: String,
@@ -49,6 +52,7 @@ data class Note(
     val checklistTotal: Int get() = if (isChecklist) Checklist.parse(content).count { it.text.isNotBlank() } else 0
 }
 
+@Immutable
 data class Folder(
     val id: String,
     val name: String,

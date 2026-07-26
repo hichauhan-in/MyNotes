@@ -29,6 +29,8 @@ data class AppSettings(
     /** How many days deleted notes stay in Trash before auto-deletion. 0 == keep forever. */
     val trashRetentionDays: Int = 30,
     val onboardingComplete: Boolean = false,
+    /** Persisted SAF tree Uri (as string) of the default export folder, or null if unset. */
+    val defaultExportFolder: String? = null,
 )
 
 /**
@@ -49,10 +51,18 @@ class SettingsRepository(context: Context) {
         val TRASH_RETENTION = intPreferencesKey("trash_retention_days")
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_complete")
         val TEMPLATES = stringPreferencesKey("custom_templates")
+        val EXPORT_FOLDER = stringPreferencesKey("default_export_folder")
     }
 
     val customTemplates: Flow<List<CustomTemplate>> = dataStore.data.map { prefs ->
+        parseTemplates(prefs[Keys.TEMPLATES] ?: "[]").filter { it.trashedAt == null }
+    }
+
+    /** Templates that have been deleted and are recoverable from Trash, newest first. */
+    val trashedTemplates: Flow<List<CustomTemplate>> = dataStore.data.map { prefs ->
         parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+            .filter { it.trashedAt != null }
+            .sortedByDescending { it.trashedAt }
     }
 
     val settings: Flow<AppSettings> = dataStore.data.map { prefs ->
@@ -67,6 +77,7 @@ class SettingsRepository(context: Context) {
             hideFromRecents = prefs[Keys.HIDE_RECENTS] ?: false,
             trashRetentionDays = prefs[Keys.TRASH_RETENTION] ?: 30,
             onboardingComplete = prefs[Keys.ONBOARDING_DONE] ?: false,
+            defaultExportFolder = prefs[Keys.EXPORT_FOLDER],
         )
     }
 
@@ -94,6 +105,10 @@ class SettingsRepository(context: Context) {
     suspend fun setOnboardingComplete(value: Boolean) =
         edit { it[Keys.ONBOARDING_DONE] = value }
 
+    suspend fun setDefaultExportFolder(uri: String?) = edit {
+        if (uri == null) it.remove(Keys.EXPORT_FOLDER) else it[Keys.EXPORT_FOLDER] = uri
+    }
+
     suspend fun addTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
         prefs[Keys.TEMPLATES] = serializeTemplates(current + template)
@@ -107,8 +122,39 @@ class SettingsRepository(context: Context) {
     }
 
     suspend fun deleteTemplate(id: String) = dataStore.edit { prefs ->
+        // Soft delete: move the template into Trash so it can be recovered for the retention window.
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(
+            current.map {
+                if (it.id == id && it.trashedAt == null) it.copy(trashedAt = System.currentTimeMillis()) else it
+            },
+        )
+    }
+
+    suspend fun restoreTemplate(id: String) = dataStore.edit { prefs ->
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(
+            current.map { if (it.id == id) it.copy(trashedAt = null) else it },
+        )
+    }
+
+    suspend fun deleteTemplatePermanently(id: String) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
         prefs[Keys.TEMPLATES] = serializeTemplates(current.filterNot { it.id == id })
+    }
+
+    /** Permanently removes trashed templates deleted before [cutoff] (epoch millis). */
+    suspend fun purgeTrashedTemplatesBefore(cutoff: Long) = dataStore.edit { prefs ->
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(
+            current.filterNot { it.trashedAt != null && it.trashedAt < cutoff },
+        )
+    }
+
+    /** Permanently removes every trashed template (used by "Empty Trash"). */
+    suspend fun emptyTrashedTemplates() = dataStore.edit { prefs ->
+        val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        prefs[Keys.TEMPLATES] = serializeTemplates(current.filter { it.trashedAt == null })
     }
 
     private fun parseTemplates(json: String): List<CustomTemplate> = runCatching {
@@ -120,6 +166,7 @@ class SettingsRepository(context: Context) {
                 name = o.optString("name"),
                 iconKey = o.optString("icon", "note"),
                 content = o.optString("content"),
+                trashedAt = if (o.has("trashedAt") && !o.isNull("trashedAt")) o.optLong("trashedAt") else null,
             )
         }
     }.getOrDefault(emptyList())
@@ -127,13 +174,13 @@ class SettingsRepository(context: Context) {
     private fun serializeTemplates(items: List<CustomTemplate>): String {
         val arr = JSONArray()
         items.forEach {
-            arr.put(
-                JSONObject()
-                    .put("id", it.id)
-                    .put("name", it.name)
-                    .put("icon", it.iconKey)
-                    .put("content", it.content),
-            )
+            val o = JSONObject()
+                .put("id", it.id)
+                .put("name", it.name)
+                .put("icon", it.iconKey)
+                .put("content", it.content)
+            if (it.trashedAt != null) o.put("trashedAt", it.trashedAt)
+            arr.put(o)
         }
         return arr.toString()
     }

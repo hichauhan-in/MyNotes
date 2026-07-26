@@ -16,7 +16,9 @@ object AttachmentStore {
     private fun dir(context: Context): File =
         File(context.filesDir, "attachments").apply { mkdirs() }
 
-    fun fileFor(context: Context, name: String): File = File(dir(context), name)
+    // Only the last path segment is ever used, so a maliciously-crafted note token like
+    // `attachment://../../databases/...` can never resolve outside the attachments directory.
+    fun fileFor(context: Context, name: String): File = File(dir(context), File(name).name)
 
     /** A fresh, empty destination file for a camera capture. */
     fun newImageFile(context: Context): File =

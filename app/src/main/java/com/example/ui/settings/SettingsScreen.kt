@@ -3,6 +3,9 @@ package com.example.ui.settings
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.provider.DocumentsContract
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,7 +39,9 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ColorLens
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Fingerprint
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Lock
@@ -192,6 +197,52 @@ fun SettingsScreen(
 
             Spacer(Modifier.height(20.dp))
 
+            // ---- Export ----
+            SettingsSection(title = "Export", icon = Icons.Rounded.FolderOpen) {
+                val exportContext = LocalContext.current
+                val exportFolder = settings.defaultExportFolder
+                val exportPicker = rememberLauncherForActivityResult(
+                    ActivityResultContracts.OpenDocumentTree(),
+                ) { uri ->
+                    if (uri != null) {
+                        runCatching {
+                            exportContext.contentResolver.takePersistableUriPermission(
+                                uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                            )
+                        }
+                        viewModel.setDefaultExportFolder(uri.toString())
+                    }
+                }
+                SettingsLinkRow(
+                    icon = Icons.Rounded.FolderOpen,
+                    title = "Default export folder",
+                    subtitle = exportFolder?.let { exportFolderLabel(it) } ?: "Ask each time when exporting",
+                    trailingIcon = Icons.Rounded.Edit,
+                    onClick = { runCatching { exportPicker.launch(null) } },
+                )
+                if (exportFolder != null) {
+                    SettingsDivider()
+                    SettingsLinkRow(
+                        icon = Icons.Rounded.Close,
+                        title = "Clear default folder",
+                        subtitle = "Go back to choosing a location each time",
+                        onClick = { viewModel.setDefaultExportFolder(null) },
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Notes export as text, Markdown, HTML or PDF; a book exports as a ZIP that " +
+                        "keeps its folder structure and attachments. Files save to this folder, or you'll " +
+                        "be asked where to save each time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
             // ---- About ----
             SettingsSection(title = "About", icon = Icons.Rounded.Info) {
                 val context = LocalContext.current
@@ -224,6 +275,11 @@ fun SettingsScreen(
         AppInfoDialog(onDismiss = { showAppInfo = false })
     }
 }
+
+private fun exportFolderLabel(uriStr: String): String = runCatching {
+    val id = DocumentsContract.getTreeDocumentId(Uri.parse(uriStr))
+    id.substringAfter(':').ifBlank { id }
+}.getOrDefault("Selected folder")
 
 @Composable
 private fun SettingsSection(

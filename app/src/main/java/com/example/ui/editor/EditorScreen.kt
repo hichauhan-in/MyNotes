@@ -59,6 +59,14 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.PictureAsPdf
+import androidx.compose.material.icons.rounded.Share
+import androidx.compose.material.icons.rounded.TextSnippet
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FormatBold
@@ -92,6 +100,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -102,6 +111,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -138,10 +148,14 @@ import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.attachments.AttachmentStore
+import com.example.data.export.ExportFormat
+import com.example.data.export.ExportIO
+import com.example.data.export.Exporter
 import com.example.domain.model.AttachmentKind
 import com.example.domain.model.AttachmentMarkup
 import com.example.domain.model.Checklist as ChecklistUtil
 import com.example.domain.model.ChecklistItem
+import com.example.domain.model.Note
 import com.example.domain.model.NoteType
 import com.example.ui.components.NeuIconButton
 import com.example.ui.components.BrandGradientButton
@@ -158,6 +172,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** When true, the editor is shown read-only; the pencil in the top bar toggles editing. */
+internal val LocalReadOnly = staticCompositionLocalOf { false }
+
 @Composable
 fun EditorScreen(
     viewModel: EditorViewModel,
@@ -169,14 +186,20 @@ fun EditorScreen(
 ) {
     LaunchedEffect(Unit) { viewModel.load(noteId, template, folderId, templateId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
+    // Existing notes open read-only; new notes and template drafts open ready to edit.
+    var editing by remember { mutableStateOf(noteId == null) }
     var showColorSheet by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     var showVoiceRecorder by remember { mutableStateOf(false) }
     var showMicRationale by remember { mutableStateOf(false) }
     var showTagSheet by remember { mutableStateOf(false) }
     var showTableDialog by remember { mutableStateOf(false) }
+    var showShareSheet by remember { mutableStateOf(false) }
+    var showExportSheet by remember { mutableStateOf(false) }
+    var pendingExportFormat by remember { mutableStateOf<ExportFormat?>(null) }
     val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
     val blocks = remember { mutableStateListOf<EditorBlock>() }
     var focusedBlockId by remember { mutableStateOf<String?>(null) }
@@ -350,6 +373,75 @@ fun EditorScreen(
         pendingCameraFile = null
     }
 
+    fun buildExportNote() = Note(
+        id = state.id,
+        title = state.title,
+        content = state.content,
+        createdAt = state.createdAt,
+        updatedAt = state.updatedAt,
+        isPinned = state.isPinned,
+        isFavorite = state.isFavorite,
+        folderId = state.folderId,
+        tags = state.tags,
+        colorArgb = state.colorArgb,
+        type = state.type,
+        attachments = state.attachments,
+    )
+
+    // Notes with images / voice notes export as a self-contained ZIP (note file + attachments);
+    // plain notes export as the single chosen file.
+    fun writeNoteExport(uri: android.net.Uri, note: Note, format: ExportFormat): Boolean =
+        if (note.attachments.isNotEmpty()) {
+            ExportIO.writeStream(context, uri) { out -> Exporter.writeNoteZip(context, note, format, out) }
+        } else {
+            ExportIO.writeBytes(context, uri, Exporter.noteBytes(note, format))
+        }
+
+    val exportDocLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("*/*"),
+    ) { uri ->
+        val format = pendingExportFormat
+        pendingExportFormat = null
+        if (uri != null && format != null) {
+            val note = buildExportNote()
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) { writeNoteExport(uri, note, format) }
+                android.widget.Toast.makeText(
+                    context,
+                    if (ok) "Exported" else "Couldn't export",
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
+
+    fun exportNote(format: ExportFormat) {
+        val note = buildExportNote()
+        val zipped = note.attachments.isNotEmpty()
+        val ext = if (zipped) "zip" else format.ext
+        val mime = if (zipped) "application/zip" else format.mime
+        val fileName = "${Exporter.noteFileBase(note)}.$ext"
+        val folder = defaultExportFolder
+        if (folder != null) {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    val target = ExportIO.createInTree(context, folder, fileName, mime)
+                    target != null && writeNoteExport(target, note, format)
+                }
+                if (ok) {
+                    android.widget.Toast.makeText(context, "Exported to your folder", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    // Saved folder unavailable - fall back to the picker.
+                    pendingExportFormat = format
+                    runCatching { exportDocLauncher.launch(fileName) }
+                }
+            }
+        } else {
+            pendingExportFormat = format
+            runCatching { exportDocLauncher.launch(fileName) }
+        }
+    }
+
     // Seed the editable fields once the note has been loaded / created.
     LaunchedEffect(state.id) {
         titleField = TextFieldValue(state.title, TextRange(state.title.length))
@@ -361,7 +453,7 @@ fun EditorScreen(
             if (checklistItems.isEmpty()) {
                 checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
             }
-        } else {
+        } else if (state.type != NoteType.SHEET && state.type != NoteType.EXPENSE && state.type != NoteType.SCRIBBLE) {
             val parsed = parseContentToBlocks(state.content).toMutableList()
             // Migrate legacy notes whose images were kept only in `attachments`.
             if (parsed.none { it is ImageBlock } && state.attachments.isNotEmpty()) {
@@ -398,18 +490,39 @@ fun EditorScreen(
     ) {
         EditorTopBar(
             saveStatus = state.saveStatus,
-            isPinned = state.isPinned,
-            isFavorite = state.isFavorite,
             templateMode = state.templateMode,
+            editing = editing,
             onBack = { leave() },
-            onTogglePin = viewModel::togglePin,
-            onToggleFavorite = viewModel::toggleFavorite,
-            onColor = { showColorSheet = true },
+            onToggleEdit = {
+                if (editing) {
+                    focusManager.clearFocus(force = true)
+                    viewModel.flush()
+                }
+                editing = !editing
+            },
+            onShare = { showShareSheet = true },
+            onExport = { showExportSheet = true },
             onDelete = {
                 focusManager.clearFocus(force = true)
                 viewModel.deleteToTrash { onNavigateBack() }
             },
         )
+
+        CompositionLocalProvider(LocalReadOnly provides !editing) {
+        val metaBar: @Composable () -> Unit = {
+            if (editing) {
+                EditorActionRow(
+                    isFavorite = state.isFavorite,
+                    isPinned = state.isPinned,
+                    colorArgb = state.colorArgb,
+                    tags = state.tags,
+                    onToggleFavorite = viewModel::toggleFavorite,
+                    onTogglePin = viewModel::togglePin,
+                    onColor = { showColorSheet = true },
+                    onEditTags = { showTagSheet = true },
+                )
+            }
+        }
 
         when (state.type) {
             NoteType.SHEET -> SheetEditor(
@@ -418,6 +531,7 @@ fun EditorScreen(
                 content = state.content,
                 onTitleChange = viewModel::onTitleChanged,
                 onContentChange = viewModel::onContentChanged,
+                meta = metaBar,
                 modifier = Modifier.weight(1f),
             )
 
@@ -427,6 +541,7 @@ fun EditorScreen(
                 content = state.content,
                 onTitleChange = viewModel::onTitleChanged,
                 onContentChange = viewModel::onContentChanged,
+                meta = metaBar,
                 modifier = Modifier.weight(1f),
             )
 
@@ -436,6 +551,7 @@ fun EditorScreen(
                 content = state.content,
                 onTitleChange = viewModel::onTitleChanged,
                 onContentChange = viewModel::onContentChanged,
+                meta = metaBar,
                 modifier = Modifier.weight(1f),
             )
 
@@ -459,6 +575,7 @@ fun EditorScreen(
                     fontWeight = FontWeight.Bold,
                 ),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                readOnly = LocalReadOnly.current,
                 decorationBox = { inner ->
                     if (titleField.text.isEmpty()) {
                         Text(
@@ -479,6 +596,8 @@ fun EditorScreen(
                     onSelect = viewModel::setTemplateIcon,
                 )
             } else {
+                metaBar()
+                Spacer(Modifier.height(12.dp))
                 if (state.type == NoteType.CHECKLIST) {
                     ChecklistProgress(
                         done = checklistItems.count { it.checked && it.text.isNotBlank() },
@@ -490,9 +609,6 @@ fun EditorScreen(
                         readingMinutes = state.readingMinutes,
                     )
                 }
-
-                Spacer(Modifier.height(12.dp))
-                TagRow(tags = state.tags, onEdit = { showTagSheet = true })
             }
 
             Spacer(Modifier.height(16.dp))
@@ -587,7 +703,7 @@ fun EditorScreen(
             )
         }
 
-        if (state.type != NoteType.CHECKLIST) {
+        if (editing && state.type != NoteType.CHECKLIST) {
             FormattingToolbar(
                 onImage = { showImagePicker = true },
                 onVoice = { startVoiceNote() },
@@ -605,6 +721,7 @@ fun EditorScreen(
         }
         }
         }
+        }
     }
 
     if (showColorSheet) {
@@ -615,6 +732,20 @@ fun EditorScreen(
                 showColorSheet = false
             },
             onDismiss = { showColorSheet = false },
+        )
+    }
+
+    if (showShareSheet) {
+        ShareOptionsSheet(onDismiss = { showShareSheet = false })
+    }
+
+    if (showExportSheet) {
+        ExportOptionsSheet(
+            onPick = { format ->
+                showExportSheet = false
+                exportNote(format)
+            },
+            onDismiss = { showExportSheet = false },
         )
     }
 
@@ -701,13 +832,12 @@ fun EditorScreen(
 @Composable
 private fun EditorTopBar(
     saveStatus: SaveStatus,
-    isPinned: Boolean,
-    isFavorite: Boolean,
     templateMode: Boolean,
+    editing: Boolean,
     onBack: () -> Unit,
-    onTogglePin: () -> Unit,
-    onToggleFavorite: () -> Unit,
-    onColor: () -> Unit,
+    onToggleEdit: () -> Unit,
+    onShare: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Row(
@@ -736,34 +866,188 @@ private fun EditorTopBar(
             SaveStatusPill(saveStatus)
             Spacer(Modifier.weight(1f))
             NeuIconButton(
-                icon = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                contentDescription = "Favorite",
-                onClick = onToggleFavorite,
+                icon = if (editing) Icons.Rounded.Check else Icons.Rounded.Edit,
+                contentDescription = if (editing) "Done editing" else "Edit",
+                onClick = onToggleEdit,
                 size = 44.dp,
-                tint = if (isFavorite) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = if (editing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(10.dp))
-            NeuIconButton(
-                icon = Icons.Rounded.PushPin,
-                contentDescription = "Pin",
-                onClick = onTogglePin,
-                size = 44.dp,
-                tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            EditorOverflowMenu(onShare = onShare, onExport = onExport, onDelete = onDelete)
+        }
+    }
+}
+
+/** The top-right overflow (⋮) menu: Share, Export and Move-to-Trash, each with its own icon. */
+@Composable
+private fun EditorOverflowMenu(
+    onShare: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        NeuIconButton(
+            icon = Icons.Rounded.MoreVert,
+            contentDescription = "More options",
+            onClick = { open = true },
+            size = 44.dp,
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Share") },
+                leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
+                onClick = { open = false; onShare() },
             )
-            Spacer(Modifier.width(10.dp))
-            NeuIconButton(
-                icon = Icons.Rounded.Palette,
+            DropdownMenuItem(
+                text = { Text("Export") },
+                leadingIcon = { Icon(Icons.Rounded.FileDownload, contentDescription = null) },
+                onClick = { open = false; onExport() },
+            )
+            DropdownMenuItem(
+                text = { Text("Move to Trash", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Icons.Rounded.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = { open = false; onDelete() },
+            )
+        }
+    }
+}
+
+/**
+ * The shared "note controls" row shown just under the title on every note type: favourite, pin,
+ * colour and tags. Tapping favourite/pin toggles them; colour and tags open their pickers.
+ */
+@Composable
+private fun EditorActionRow(
+    isFavorite: Boolean,
+    isPinned: Boolean,
+    colorArgb: Int,
+    tags: List<String>,
+    onToggleFavorite: () -> Unit,
+    onTogglePin: () -> Unit,
+    onColor: () -> Unit,
+    onEditTags: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MetaChip(
+            icon = if (isFavorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+            contentDescription = "Favourite",
+            active = isFavorite,
+            activeColor = MaterialTheme.colorScheme.secondary,
+            onClick = onToggleFavorite,
+        )
+        MetaChip(
+            icon = Icons.Rounded.PushPin,
+            contentDescription = "Pin",
+            active = isPinned,
+            activeColor = MaterialTheme.colorScheme.primary,
+            onClick = onTogglePin,
+        )
+        ColorChip(colorArgb = colorArgb, onClick = onColor)
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 2.dp)
+                .height(22.dp)
+                .width(1.dp)
+                .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        )
+        tags.forEach { tag ->
+            Text(
+                text = "#$tag",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.secondaryContainer)
+                    .clickable(onClick = onEditTags)
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+            )
+        }
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(50))
+                .clickable(onClick = onEditTags)
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Sell,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Add tag",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MetaChip(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    activeColor: Color,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .then(if (active) Modifier.background(activeColor.copy(alpha = 0.14f)) else Modifier)
+            .border(
+                1.dp,
+                if (active) activeColor else MaterialTheme.colorScheme.outlineVariant,
+                CircleShape,
+            )
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = if (active) activeColor else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun ColorChip(colorArgb: Int, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (colorArgb != 0) {
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(Color(colorArgb)),
+            )
+        } else {
+            Icon(
+                imageVector = Icons.Rounded.Palette,
                 contentDescription = "Note colour",
-                onClick = onColor,
-                size = 44.dp,
-            )
-            Spacer(Modifier.width(10.dp))
-            NeuIconButton(
-                icon = Icons.Rounded.Delete,
-                contentDescription = "Move to Trash",
-                onClick = onDelete,
-                size = 44.dp,
-                tint = MaterialTheme.colorScheme.error,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
             )
         }
     }
@@ -1208,6 +1492,117 @@ private fun ColorSwatch(
     }
 }
 
+// ---- Share & export -------------------------------------------------------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ShareOptionsSheet(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Share",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Choose how you'd like to share this note.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            SheetOptionRow(Icons.Rounded.Share, "Share as text", "Send the note's text to another app") {
+                comingSoon(context); onDismiss()
+            }
+            SheetOptionRow(Icons.Rounded.PictureAsPdf, "Share as PDF", "Attach a PDF copy") {
+                comingSoon(context); onDismiss()
+            }
+            SheetOptionRow(Icons.Rounded.Link, "Copy link", "A shareable link to this note") {
+                comingSoon(context); onDismiss()
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExportOptionsSheet(onPick: (ExportFormat) -> Unit, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Export",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Pick a format to save this note.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(16.dp))
+            SheetOptionRow(Icons.Rounded.PictureAsPdf, "PDF document", ".pdf") { onPick(ExportFormat.PDF) }
+            SheetOptionRow(Icons.Rounded.Description, "Markdown", ".md") { onPick(ExportFormat.MD) }
+            SheetOptionRow(Icons.Rounded.TextSnippet, "Plain text", ".txt") { onPick(ExportFormat.TXT) }
+            SheetOptionRow(Icons.Rounded.Code, "Web page", ".html") { onPick(ExportFormat.HTML) }
+        }
+    }
+}
+
+@Composable
+private fun SheetOptionRow(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+private fun comingSoon(context: android.content.Context) {
+    android.widget.Toast.makeText(context, "Coming soon", android.widget.Toast.LENGTH_SHORT).show()
+}
+
 @Composable
 private fun MicPermissionDialog(
     onOpenSettings: () -> Unit,
@@ -1440,6 +1835,7 @@ private fun EditorTextBlock(
         ),
         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
         visualTransformation = transformation,
+        readOnly = LocalReadOnly.current,
         decorationBox = { inner ->
             if (showHint) {
                 Text(
@@ -1512,6 +1908,7 @@ private fun ResizableAttachmentImage(
     onCrop: () -> Unit,
 ) {
     val context = LocalContext.current
+    val readOnly = LocalReadOnly.current
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val maxWidthPx = with(LocalDensity.current) { maxWidth.toPx() }
         // Local, smoothly-updated width while dragging; synced when the saved value changes.
@@ -1536,42 +1933,46 @@ private fun ResizableAttachmentImage(
                     .heightIn(max = 420.dp)
                     .clip(RoundedCornerShape(16.dp)),
             )
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ImageOverlayButton(icon = Icons.Rounded.Crop, description = "Crop image", onClick = onCrop)
-                ImageOverlayButton(icon = Icons.Rounded.Close, description = "Remove image", onClick = onRemove)
+            if (!readOnly) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ImageOverlayButton(icon = Icons.Rounded.Crop, description = "Crop image", onClick = onCrop)
+                    ImageOverlayButton(icon = Icons.Rounded.Close, description = "Remove image", onClick = onRemove)
+                }
             }
             // Drag this corner handle to scale the image down (or back up).
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(10.dp)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
-                    .pointerInput(maxWidthPx) {
-                        detectDragGestures(
-                            onDrag = { change, drag ->
-                                change.consume()
-                                if (maxWidthPx > 0f) {
-                                    fraction = (fraction + drag.x / maxWidthPx).coerceIn(0.3f, 1f)
-                                }
-                            },
-                            onDragEnd = { onWidthChange((fraction * 100).roundToInt()) },
-                        )
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.OpenInFull,
-                    contentDescription = "Resize image",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp),
-                )
+            if (!readOnly) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(10.dp)
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f))
+                        .pointerInput(maxWidthPx) {
+                            detectDragGestures(
+                                onDrag = { change, drag ->
+                                    change.consume()
+                                    if (maxWidthPx > 0f) {
+                                        fraction = (fraction + drag.x / maxWidthPx).coerceIn(0.3f, 1f)
+                                    }
+                                },
+                                onDragEnd = { onWidthChange((fraction * 100).roundToInt()) },
+                            )
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.OpenInFull,
+                        contentDescription = "Resize image",
+                        tint = Color.White,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }
@@ -1679,6 +2080,7 @@ private fun ChecklistBody(
     items: SnapshotStateList<UiChecklistItem>,
     onChanged: () -> Unit,
 ) {
+    val readOnly = LocalReadOnly.current
     Column(modifier = Modifier.fillMaxWidth()) {
         items.forEach { item ->
             key(item.id) {
@@ -1714,7 +2116,7 @@ private fun ChecklistBody(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
-                .clickable {
+                .clickable(enabled = !readOnly) {
                     items.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
                     onChanged()
                 }
@@ -1743,6 +2145,7 @@ private fun ChecklistRow(
     onTextChange: (String) -> Unit,
     onDelete: () -> Unit,
 ) {
+    val readOnly = LocalReadOnly.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -1759,7 +2162,7 @@ private fun ChecklistRow(
                     color = if (item.checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                     shape = RoundedCornerShape(7.dp),
                 )
-                .clickable(onClick = onToggle),
+                .clickable(enabled = !readOnly, onClick = onToggle),
             contentAlignment = Alignment.Center,
         ) {
             if (item.checked) {
@@ -1781,6 +2184,7 @@ private fun ChecklistRow(
                 textDecoration = if (item.checked) TextDecoration.LineThrough else null,
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            readOnly = readOnly,
             modifier = Modifier.weight(1f),
             decorationBox = { inner ->
                 if (item.text.isEmpty()) {
@@ -1797,7 +2201,7 @@ private fun ChecklistRow(
             modifier = Modifier
                 .size(30.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onDelete),
+                .clickable(enabled = !readOnly, onClick = onDelete),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1818,6 +2222,7 @@ private fun ChecklistBlockView(
     onChange: (List<ChecklistEntry>) -> Unit,
 ) {
     val neu = LocalNeuColors.current
+    val readOnly = LocalReadOnly.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1847,7 +2252,7 @@ private fun ChecklistBlockView(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
-                .clickable { onChange(block.items + ChecklistEntry(newBlockId(), "", false)) }
+                .clickable(enabled = !readOnly) { onChange(block.items + ChecklistEntry(newBlockId(), "", false)) }
                 .padding(vertical = 6.dp, horizontal = 4.dp),
         ) {
             Icon(
@@ -1901,7 +2306,7 @@ private fun TableBlockView(
                 modifier = Modifier
                     .size(30.dp)
                     .clip(CircleShape)
-                    .clickable(onClick = onRemove),
+                    .clickable(enabled = !LocalReadOnly.current, onClick = onRemove),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -1957,6 +2362,7 @@ private fun TableBlockView(
                                     color = MaterialTheme.colorScheme.onSurface,
                                 ),
                                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                readOnly = LocalReadOnly.current,
                                 modifier = Modifier.fillMaxWidth(),
                             )
                         }
@@ -2071,7 +2477,7 @@ private fun TableCtrl(icon: ImageVector, description: String, onClick: () -> Uni
         modifier = Modifier
             .size(30.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(enabled = !LocalReadOnly.current, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -2091,6 +2497,7 @@ private fun CalloutBlockView(
     onRemove: () -> Unit,
 ) {
     val emojis = remember { listOf("💡", "⚠️", "✅", "📌", "🔥", "❤️", "📝", "❓", "⭐", "🚀") }
+    val readOnly = LocalReadOnly.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2104,7 +2511,7 @@ private fun CalloutBlockView(
                 .size(32.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
-                .clickable {
+                .clickable(enabled = !readOnly) {
                     val idx = emojis.indexOf(block.emoji).coerceAtLeast(0)
                     onChange(block.copy(emoji = emojis[(idx + 1) % emojis.size]))
                 },
@@ -2118,6 +2525,7 @@ private fun CalloutBlockView(
             onValueChange = { onChange(block.copy(text = it)) },
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            readOnly = readOnly,
             decorationBox = { inner ->
                 if (block.text.isEmpty()) {
                     Text(
@@ -2136,7 +2544,7 @@ private fun CalloutBlockView(
             modifier = Modifier
                 .size(28.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onRemove),
+                .clickable(enabled = !readOnly, onClick = onRemove),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -2160,6 +2568,7 @@ private fun ScribbleBlockView(
     val strokeColor = MaterialTheme.colorScheme.onSurface
     val current by rememberUpdatedState(block)
     val livePoints = remember { mutableStateListOf<Offset>() }
+    val readOnly = LocalReadOnly.current
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -2191,7 +2600,7 @@ private fun ScribbleBlockView(
                 modifier = Modifier
                     .size(30.dp)
                     .clip(CircleShape)
-                    .clickable(onClick = onRemove),
+                    .clickable(enabled = !readOnly, onClick = onRemove),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -2210,29 +2619,32 @@ private fun ScribbleBlockView(
                 .clip(RoundedCornerShape(14.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        val down = awaitFirstDown(requireUnconsumed = false)
-                        down.consume()
-                        livePoints.clear()
-                        livePoints.add(down.position)
-                        var active = true
-                        while (active) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null || !change.pressed) {
-                                active = false
-                            } else {
-                                livePoints.add(change.position)
-                                change.consume()
+                .then(
+                    if (readOnly) Modifier
+                    else Modifier.pointerInput(Unit) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            down.consume()
+                            livePoints.clear()
+                            livePoints.add(down.position)
+                            var active = true
+                            while (active) {
+                                val event = awaitPointerEvent()
+                                val change = event.changes.firstOrNull { it.id == down.id }
+                                if (change == null || !change.pressed) {
+                                    active = false
+                                } else {
+                                    livePoints.add(change.position)
+                                    change.consume()
+                                }
                             }
+                            if (livePoints.isNotEmpty()) {
+                                onChange(current.copy(strokes = current.strokes + listOf(livePoints.toList())), true)
+                            }
+                            livePoints.clear()
                         }
-                        if (livePoints.isNotEmpty()) {
-                            onChange(current.copy(strokes = current.strokes + listOf(livePoints.toList())), true)
-                        }
-                        livePoints.clear()
-                    }
-                },
+                    },
+                ),
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
                 fun drawStroke(points: List<Offset>) {

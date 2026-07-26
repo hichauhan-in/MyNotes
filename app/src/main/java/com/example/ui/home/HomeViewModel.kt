@@ -7,6 +7,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -14,11 +15,13 @@ import com.example.di.AppContainer
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Folder
 import com.example.domain.model.Note
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -33,6 +36,7 @@ enum class NoteFilter(val label: String, val icon: ImageVector) {
 }
 
 /** A book (folder) plus how much it contains, for display on the home screen. */
+@Immutable
 data class BookItem(
     val folder: Folder,
     val noteCount: Int,
@@ -81,11 +85,19 @@ class HomeViewModel : ViewModel() {
         .map { it.trashRetentionDays }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 30)
 
+    val defaultExportFolder: StateFlow<String?> = settings.settings
+        .map { it.defaultExportFolder }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     fun setTrashRetention(days: Int) = viewModelScope.launch {
         settings.setTrashRetentionDays(days)
     }
 
     val customTemplates: StateFlow<List<CustomTemplate>> = settings.customTemplates
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Deleted templates recoverable from Trash. */
+    val trashedTemplates: StateFlow<List<CustomTemplate>> = settings.trashedTemplates
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /** Every book, flat - used by the "move to book" picker. */
@@ -95,6 +107,9 @@ class HomeViewModel : ViewModel() {
     /** Snapshot of every note, used to summarise what a recursive book delete will remove. */
     private val allNotesSnapshot: StateFlow<List<Note>> = repository.allNotes
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Every note snapshot, exposed for book export traversal. */
+    val notesForExport: StateFlow<List<Note>> get() = allNotesSnapshot
 
     fun addCustomTemplate(name: String, iconKey: String, content: String) = viewModelScope.launch {
         settings.addTemplate(CustomTemplate(name = name, iconKey = iconKey, content = content))
@@ -111,6 +126,16 @@ class HomeViewModel : ViewModel() {
         settings.deleteTemplate(id)
     }
 
+    /** Recover a deleted template back into the active templates list. */
+    fun restoreTemplate(id: String) = viewModelScope.launch {
+        settings.restoreTemplate(id)
+    }
+
+    /** Permanently remove a trashed template. */
+    fun deleteTemplateForever(id: String) = viewModelScope.launch {
+        settings.deleteTemplatePermanently(id)
+    }
+
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
 
@@ -122,20 +147,24 @@ class HomeViewModel : ViewModel() {
     private val _selectedIds = MutableStateFlow<Set<String>>(emptySet())
     val selectedIds: StateFlow<Set<String>> = _selectedIds.asStateFlow()
 
+    private val _selectedBookIds = MutableStateFlow<Set<String>>(emptySet())
+    val selectedBookIds: StateFlow<Set<String>> = _selectedBookIds.asStateFlow()
+
     val uiState: StateFlow<HomeUiState> =
         combine(
-            repository.allNotes,
-            folders.allFolders,
+            allNotesSnapshot,
+            allFolders,
             _query,
             _filter,
             _currentFolderId,
         ) { notes, folderList, query, filter, currentFolderId ->
             buildState(notes, folderList, query, filter, currentFolderId)
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5_000),
-            initialValue = HomeUiState(),
-        )
+        }.flowOn(Dispatchers.Default)
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = HomeUiState(),
+            )
 
     private fun buildState(
         all: List<Note>,
@@ -241,6 +270,7 @@ class HomeViewModel : ViewModel() {
         _filter.value = value
         _currentFolderId.value = null
         clearSelection()
+        clearBookSelection()
     }
 
     /** The book new notes should be created in, given the current context. */
@@ -252,17 +282,20 @@ class HomeViewModel : ViewModel() {
         // Stay in whichever list we're browsing (All or Trash); just descend into the book.
         _currentFolderId.value = folderId
         clearSelection()
+        clearBookSelection()
     }
 
     fun exitToRoot() {
         _currentFolderId.value = null
         clearSelection()
+        clearBookSelection()
     }
 
     fun goUp() {
         val crumb = uiState.value.breadcrumb
         _currentFolderId.value = if (crumb.size >= 2) crumb[crumb.size - 2].id else null
         clearSelection()
+        clearBookSelection()
     }
 
     // ---- Book CRUD ----
@@ -340,14 +373,52 @@ class HomeViewModel : ViewModel() {
 
     // ---- Multi-select ----
     fun toggleSelection(id: String) {
+        _selectedBookIds.value = emptySet()
         val current = _selectedIds.value.toMutableSet()
         if (!current.add(id)) current.remove(id)
         _selectedIds.value = current
     }
 
-    fun selectAll(ids: List<String>) { _selectedIds.value = ids.toSet() }
+    fun selectAll(ids: List<String>) {
+        _selectedBookIds.value = emptySet()
+        _selectedIds.value = ids.toSet()
+    }
 
     fun clearSelection() { _selectedIds.value = emptySet() }
+
+    // ---- Book multi-select ----
+    fun toggleBookSelection(id: String) {
+        _selectedIds.value = emptySet()
+        val current = _selectedBookIds.value.toMutableSet()
+        if (!current.add(id)) current.remove(id)
+        _selectedBookIds.value = current
+    }
+
+    fun selectAllBooks(ids: List<String>) {
+        _selectedIds.value = emptySet()
+        _selectedBookIds.value = ids.toSet()
+    }
+
+    fun clearBookSelection() { _selectedBookIds.value = emptySet() }
+
+    private fun runOnBookSelection(action: suspend (String) -> Unit) {
+        val ids = _selectedBookIds.value.toList()
+        _selectedBookIds.value = emptySet()
+        // Step out of the current view if we're inside any of the affected books.
+        val subtrees = ids.flatMap { subtreeIds(it, allFolders.value) }.toSet()
+        if (_currentFolderId.value in subtrees) _currentFolderId.value = null
+        viewModelScope.launch { ids.forEach { action(it) } }
+    }
+
+    fun bulkTrashBooks() = runOnBookSelection { folders.deleteFolderTree(it) }
+    fun bulkRestoreBooks() = runOnBookSelection { folders.restoreFolderTree(it) }
+    fun bulkDeleteBooksForever() = runOnBookSelection { folders.deleteFolderTreePermanently(it) }
+
+    fun bulkMoveBooks(targetId: String?) {
+        val ids = _selectedBookIds.value.toList()
+        _selectedBookIds.value = emptySet()
+        viewModelScope.launch { ids.forEach { folders.moveFolder(it, targetId) } }
+    }
 
     private fun runOnSelection(action: suspend (String) -> Unit) {
         val ids = _selectedIds.value.toList()
@@ -398,6 +469,7 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             repository.emptyTrash()
             folders.emptyTrashedFolders()
+            settings.emptyTrashedTemplates()
         }
     }
 }

@@ -10,9 +10,12 @@ import com.example.domain.model.NoteType
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 import kotlin.math.max
@@ -66,6 +69,11 @@ class EditorViewModel : ViewModel() {
 
     private val _state = MutableStateFlow(EditorUiState())
     val state: StateFlow<EditorUiState> = _state.asStateFlow()
+
+    /** The user's saved default export folder (SAF tree Uri string), or null to ask each time. */
+    val defaultExportFolder: StateFlow<String?> =
+        settings.settings.map { it.defaultExportFolder }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private var persisted = false
     private var autoSaveJob: Job? = null

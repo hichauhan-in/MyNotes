@@ -201,6 +201,7 @@ internal fun AudioAttachment(file: File, onRemove: () -> Unit) {
     var playing by remember { mutableStateOf(false) }
     var durationSec by remember { mutableStateOf(0) }
     val player = remember { MediaPlayer() }
+    val readOnly = LocalReadOnly.current
 
     LaunchedEffect(file) {
         val ms = withContext(Dispatchers.IO) {
@@ -276,7 +277,7 @@ internal fun AudioAttachment(file: File, onRemove: () -> Unit) {
             modifier = Modifier
                 .size(32.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onRemove),
+                .clickable(enabled = !readOnly, onClick = onRemove),
             contentAlignment = Alignment.Center,
         ) {
             Icon(

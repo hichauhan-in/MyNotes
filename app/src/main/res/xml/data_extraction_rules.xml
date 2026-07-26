@@ -2,7 +2,8 @@
    Notes are encrypted with a key held in the Android Keystore, which is bound to this device
    and never leaves it. Backing up the encrypted database to another device would restore notes
    that can no longer be decrypted, so the note database and its attachments are excluded from
-   cloud backup and device transfer. Non-sensitive preferences (theme, templates) may still back up.
+   cloud backup and device transfer. The settings store is also excluded because it holds
+   user-created template content, which we keep on-device only.
 -->
 <data-extraction-rules>
     <cloud-backup>
@@ -11,6 +12,7 @@
         <exclude domain="database" path="vault_notes_db-shm" />
         <exclude domain="database" path="vault_notes_db-journal" />
         <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="datastore/" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="database" path="vault_notes_db" />
@@ -18,5 +20,6 @@
         <exclude domain="database" path="vault_notes_db-shm" />
         <exclude domain="database" path="vault_notes_db-journal" />
         <exclude domain="file" path="attachments/" />
+        <exclude domain="file" path="datastore/" />
     </device-transfer>
 </data-extraction-rules>

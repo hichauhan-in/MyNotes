@@ -210,6 +210,7 @@ internal fun ScribbleEditor(
     onTitleChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    meta: @Composable () -> Unit = {},
 ) {
     val neu = LocalNeuColors.current
     var model by remember { mutableStateOf(parseWb(content)) }
@@ -220,6 +221,7 @@ internal fun ScribbleEditor(
     val livePoints = remember { mutableStateListOf<Offset>() }
     val defaultStrokeColor = MaterialTheme.colorScheme.onSurface
     val liveColor = if (penColor == 0) defaultStrokeColor else Color(penColor)
+    val readOnly = LocalReadOnly.current
 
     fun update(m: WbModel) {
         model = m
@@ -237,6 +239,7 @@ internal fun ScribbleEditor(
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             singleLine = true,
+            readOnly = readOnly,
             decorationBox = { inner ->
                 if (title.isEmpty()) {
                     Text(
@@ -252,6 +255,8 @@ internal fun ScribbleEditor(
                 .padding(horizontal = 20.dp),
         )
         Spacer(Modifier.height(10.dp))
+        Box(Modifier.padding(horizontal = 20.dp)) { meta() }
+        Spacer(Modifier.height(10.dp))
 
         Box(
             modifier = Modifier
@@ -263,7 +268,7 @@ internal fun ScribbleEditor(
                 .background(MaterialTheme.colorScheme.surface)
                 .clipToBounds(),
         ) {
-            val gestureModifier = when (mode) {
+            val gestureModifier = when (if (readOnly) WbMode.MOVE else mode) {
                 WbMode.DRAW -> Modifier.pointerInput(Unit) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
@@ -364,24 +369,26 @@ internal fun ScribbleEditor(
                 )
             }
 
-            WbToolbar(
-                mode = mode,
-                penColor = penColor,
-                penWidth = penWidth,
-                onMode = { mode = it },
-                onPenWidth = { penWidth = it; mode = WbMode.DRAW },
-                onPenColor = { penColor = it; mode = WbMode.DRAW },
-                onUndo = { if (model.strokes.isNotEmpty()) update(model.copy(strokes = model.strokes.dropLast(1))) },
-                onClear = {
-                    if (model.strokes.isNotEmpty() || model.texts.isNotEmpty()) {
-                        update(model.copy(strokes = emptyList(), texts = emptyList()))
-                    }
-                },
-                onResetView = { update(model.copy(panX = 0f, panY = 0f, scale = 1f)) },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 14.dp),
-            )
+            if (!readOnly) {
+                WbToolbar(
+                    mode = mode,
+                    penColor = penColor,
+                    penWidth = penWidth,
+                    onMode = { mode = it },
+                    onPenWidth = { penWidth = it; mode = WbMode.DRAW },
+                    onPenColor = { penColor = it; mode = WbMode.DRAW },
+                    onUndo = { if (model.strokes.isNotEmpty()) update(model.copy(strokes = model.strokes.dropLast(1))) },
+                    onClear = {
+                        if (model.strokes.isNotEmpty() || model.texts.isNotEmpty()) {
+                            update(model.copy(strokes = emptyList(), texts = emptyList()))
+                        }
+                    },
+                    onResetView = { update(model.copy(panX = 0f, panY = 0f, scale = 1f)) },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 14.dp),
+                )
+            }
         }
         Spacer(Modifier.height(12.dp))
     }
@@ -395,6 +402,7 @@ private fun WbTextNote(
     onDelete: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
+    val readOnly = LocalReadOnly.current
     Row(
         modifier = Modifier
             .offset { IntOffset(note.x.roundToInt(), note.y.roundToInt()) }
@@ -408,12 +416,15 @@ private fun WbTextNote(
         Box(
             modifier = Modifier
                 .size(26.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures { change, drag ->
-                        change.consume()
-                        onMove(drag.x, drag.y)
-                    }
-                },
+                .then(
+                    if (readOnly) Modifier
+                    else Modifier.pointerInput(Unit) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            onMove(drag.x, drag.y)
+                        }
+                    },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -428,6 +439,7 @@ private fun WbTextNote(
             onValueChange = onText,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            readOnly = readOnly,
             decorationBox = { inner ->
                 if (note.text.isEmpty()) {
                     Text(
@@ -446,7 +458,7 @@ private fun WbTextNote(
             modifier = Modifier
                 .size(24.dp)
                 .clip(CircleShape)
-                .clickable(onClick = onDelete),
+                .clickable(enabled = !readOnly, onClick = onDelete),
             contentAlignment = Alignment.Center,
         ) {
             Icon(

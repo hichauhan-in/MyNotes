@@ -12,13 +12,17 @@ class VaultNotesApp : Application() {
         purgeExpiredTrash()
     }
 
-    /** Permanently removes trashed notes that have outlived the retention window. */
+    /** Permanently removes trashed notes and templates that have outlived the retention window. */
     private fun purgeExpiredTrash() {
         val notes = AppContainer.noteRepository ?: return
         val settings = AppContainer.settingsRepository ?: return
         AppContainer.applicationScope.launch {
             val days = runCatching { settings.settings.first().trashRetentionDays }.getOrDefault(30)
             notes.purgeTrashOlderThan(days)
+            if (days > 0) {
+                val cutoff = System.currentTimeMillis() - days.toLong() * 24 * 60 * 60 * 1000
+                settings.purgeTrashedTemplatesBefore(cutoff)
+            }
         }
     }
 }

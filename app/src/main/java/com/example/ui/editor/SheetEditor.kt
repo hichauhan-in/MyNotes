@@ -132,6 +132,7 @@ internal fun SheetEditor(
     onTitleChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
     modifier: Modifier = Modifier,
+    meta: @Composable () -> Unit = {},
 ) {
     val neu = LocalNeuColors.current
     var model by remember { mutableStateOf(parseSheet(content)) }
@@ -154,6 +155,7 @@ internal fun SheetEditor(
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             singleLine = true,
+            readOnly = LocalReadOnly.current,
             decorationBox = { inner ->
                 if (title.isEmpty()) {
                     Text(
@@ -166,6 +168,8 @@ internal fun SheetEditor(
             },
             modifier = Modifier.fillMaxWidth(),
         )
+        Spacer(Modifier.height(12.dp))
+        meta()
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             SheetAxisLabel("R")
@@ -369,6 +373,7 @@ private fun SheetCell(value: String, width: Int, height: Int, onChange: (String)
             onValueChange = onChange,
             textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            readOnly = LocalReadOnly.current,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -380,7 +385,7 @@ private fun SheetCtrl(icon: ImageVector, description: String, onClick: () -> Uni
         modifier = Modifier
             .size(32.dp)
             .clip(CircleShape)
-            .clickable(onClick = onClick),
+            .clickable(enabled = !LocalReadOnly.current, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

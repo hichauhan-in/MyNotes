@@ -42,4 +42,8 @@ class SettingsViewModel : ViewModel() {
     fun setHideFromRecents(value: Boolean) {
         viewModelScope.launch { repository.setHideFromRecents(value) }
     }
+
+    fun setDefaultExportFolder(uri: String?) {
+        viewModelScope.launch { repository.setDefaultExportFolder(uri) }
+    }
 }

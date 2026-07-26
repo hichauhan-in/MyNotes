@@ -11,4 +11,6 @@ data class CustomTemplate(
     val name: String,
     val iconKey: String,
     val content: String,
+    /** When non-null, the template is in Trash and this is when it was deleted (epoch millis). */
+    val trashedAt: Long? = null,
 )

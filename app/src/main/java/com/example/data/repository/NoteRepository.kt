@@ -9,6 +9,7 @@ import com.example.domain.model.Note
 import com.example.domain.model.NoteType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -23,9 +24,11 @@ class NoteRepository(
     private val appContext: Context,
 ) {
 
-    val allNotes: Flow<List<Note>> = noteDao.getAllNotes().map { entities ->
-        entities.map { it.toNote() }
-    }
+    val allNotes: Flow<List<Note>> = noteDao.getAllNotes()
+        .map { entities -> entities.map { it.toNote() } }
+        // Decryption is CPU work; keep it off the main thread even though this flow is
+        // collected in viewModelScope (which defaults to the main dispatcher).
+        .flowOn(Dispatchers.Default)
 
     suspend fun getNoteById(id: String): Note? = withContext(Dispatchers.IO) {
         noteDao.getNoteById(id)?.toNote()
