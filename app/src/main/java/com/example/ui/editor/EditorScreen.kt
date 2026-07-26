@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,7 +55,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -1068,16 +1068,17 @@ private fun OverflowMenuCard(
 ) {
     val neu = LocalNeuColors.current
     Surface(
-        modifier = modifier.widthIn(min = 200.dp),
-        shape = RoundedCornerShape(20.dp),
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 10.dp,
+        shadowElevation = 8.dp,
         tonalElevation = 2.dp,
     ) {
         Column(
             modifier = Modifier
-                .border(1.dp, neu.highlight.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
-                .padding(6.dp),
+                .border(1.dp, neu.highlight.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                .width(IntrinsicSize.Max)
+                .padding(5.dp),
         ) {
             OverflowMenuRow(
                 icon = Icons.Rounded.Share,
@@ -1110,21 +1111,21 @@ private fun OverflowMenuRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(11.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
             tint = tint,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(18.dp),
         )
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(12.dp))
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyLarge,
+            style = MaterialTheme.typography.bodyMedium,
             color = tint,
         )
     }

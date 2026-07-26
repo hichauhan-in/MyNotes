@@ -93,7 +93,14 @@ fun OnboardingScreen(onFinish: () -> Unit) {
             .background(MaterialTheme.colorScheme.background)
             .padding(top = insets.calculateTopPadding(), bottom = insets.calculateBottomPadding()),
     ) {
-        Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+        // Fixed-height top bar: the Skip button is only shown on the first two pages, but the bar
+        // keeps its height on the last page too, so hiding Skip never shifts the pager upwards.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .padding(horizontal = 20.dp),
+        ) {
             if (!isLast) {
                 Text(
                     text = "Skip",

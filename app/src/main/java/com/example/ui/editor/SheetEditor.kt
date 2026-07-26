@@ -30,12 +30,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +59,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -87,39 +97,72 @@ private fun parseSheet(content: String): SheetModel = runCatching {
     if (cw.isEmpty() || rh.isEmpty() || cells.isEmpty()) defaultSheet() else SheetModel(cw, rh, cells)
 }.getOrDefault(defaultSheet())
 
-private fun serializeSheet(model: SheetModel): String {
+private fun serializeGrid(grid: SheetGrid): String {
     val obj = JSONObject()
-    obj.put("cw", JSONArray(model.columnWidths))
-    obj.put("rh", JSONArray(model.rowHeights))
+    obj.put("cw", JSONArray(grid.columnWidths.toList()))
+    obj.put("rh", JSONArray(grid.rowHeights.toList()))
     val rows = JSONArray()
-    model.cells.forEach { rows.put(JSONArray(it)) }
+    grid.cells.forEach { rows.put(JSONArray(it.toList())) }
     obj.put("c", rows)
     return obj.toString()
 }
 
-private fun SheetModel.setCell(r: Int, c: Int, value: String): SheetModel =
-    copy(cells = cells.mapIndexed { ri, row ->
-        if (ri == r) row.mapIndexed { ci, cell -> if (ci == c) value else cell } else row
-    })
+private fun parseSheetGrid(content: String): SheetGrid {
+    val m = parseSheet(content)
+    return SheetGrid(m.columnWidths, m.rowHeights, m.cells)
+}
 
-private fun SheetModel.setColWidth(c: Int, w: Int): SheetModel =
-    copy(columnWidths = columnWidths.mapIndexed { i, x -> if (i == c) w else x })
+/**
+ * A snapshot-backed spreadsheet grid. Editing one cell, or resizing one column/row, mutates a
+ * single state entry (O(1)) instead of copying the whole grid, and only the affected cell/row
+ * recomposes - so even a very large sheet edits and scrolls smoothly. JSON serialization is done
+ * separately (off the main thread, debounced), never on every keystroke or drag frame.
+ */
+@Stable
+private class SheetGrid(
+    cols: List<Int>,
+    rows: List<Int>,
+    cellRows: List<List<String>>,
+) {
+    val columnWidths: SnapshotStateList<Int> = cols.toMutableStateList()
+    val rowHeights: SnapshotStateList<Int> = rows.toMutableStateList()
+    val cells: SnapshotStateList<SnapshotStateList<String>> =
+        cellRows.map { it.toMutableStateList() }.toMutableStateList()
 
-private fun SheetModel.setRowHeight(r: Int, h: Int): SheetModel =
-    copy(rowHeights = rowHeights.mapIndexed { i, x -> if (i == r) h else x })
+    val rowCount: Int get() = cells.size
+    val colCount: Int get() = columnWidths.size
 
-private fun SheetModel.addRow(): SheetModel =
-    copy(rowHeights = rowHeights + DEFAULT_ROW_H, cells = cells + listOf(List(columnWidths.size) { "" }))
+    fun setCell(r: Int, c: Int, value: String) {
+        cells.getOrNull(r)?.let { if (c in it.indices) it[c] = value }
+    }
 
-private fun SheetModel.removeRow(): SheetModel =
-    if (cells.size <= 1) this else copy(rowHeights = rowHeights.dropLast(1), cells = cells.dropLast(1))
+    fun setColWidth(c: Int, w: Int) { if (c in columnWidths.indices) columnWidths[c] = w }
+    fun setRowHeight(r: Int, h: Int) { if (r in rowHeights.indices) rowHeights[r] = h }
 
-private fun SheetModel.addColumn(): SheetModel =
-    copy(columnWidths = columnWidths + DEFAULT_COL_W, cells = cells.map { it + "" })
+    fun addRow() {
+        rowHeights.add(DEFAULT_ROW_H)
+        cells.add(MutableList(colCount) { "" }.toMutableStateList())
+    }
 
-private fun SheetModel.removeColumn(): SheetModel =
-    if (columnWidths.size <= 1) this
-    else copy(columnWidths = columnWidths.dropLast(1), cells = cells.map { it.dropLast(1) })
+    fun removeRow() {
+        if (rowCount > 1) {
+            rowHeights.removeAt(rowHeights.lastIndex)
+            cells.removeAt(cells.lastIndex)
+        }
+    }
+
+    fun addColumn() {
+        columnWidths.add(DEFAULT_COL_W)
+        cells.forEach { it.add("") }
+    }
+
+    fun removeColumn() {
+        if (colCount > 1) {
+            columnWidths.removeAt(columnWidths.lastIndex)
+            cells.forEach { if (it.isNotEmpty()) it.removeAt(it.lastIndex) }
+        }
+    }
+}
 
 private fun columnLabel(c: Int): String {
     var n = c
@@ -143,20 +186,34 @@ internal fun SheetEditor(
     meta: @Composable () -> Unit = {},
 ) {
     val neu = LocalNeuColors.current
-    var model by remember { mutableStateOf(parseSheet(content)) }
-    val current by rememberUpdatedState(model)
+    val grid = remember(seedKey) { parseSheetGrid(content) }
     // Which cell (row to col) is currently being edited. Only that one cell is a real text field;
-    // every other cell is a cheap Text, so even a 100x100 sheet stays light.
-    var activeCell by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(seedKey) {
-        model = parseSheet(content)
-        activeCell = null
-    }
+    // every other cell is a cheap Text, so even a huge sheet stays light.
+    var activeCell by remember(seedKey) { mutableStateOf<Pair<Int, Int>?>(null) }
+    val readOnly = LocalReadOnly.current
 
-    fun update(newModel: SheetModel) {
-        model = newModel
-        onContentChange(serializeSheet(newModel))
+    // Serialize the grid to JSON OFF the main thread and only after edits settle (debounced), so
+    // typing and dragging never block on rebuilding a big JSON string every keystroke/frame.
+    var revision by remember(seedKey) { mutableStateOf(0) }
+    val flushedRev = remember(seedKey) { mutableStateOf(0) }
+    LaunchedEffect(grid) {
+        snapshotFlow { revision }
+            .drop(1)
+            .collectLatest {
+                delay(350) // collectLatest cancels this when another edit lands -> debounce
+                val rev = revision
+                val json = withContext(Dispatchers.Default) { serializeGrid(grid) }
+                onContentChange(json)
+                flushedRev.value = rev
+            }
     }
+    // If the user leaves during the debounce window, flush the final state so no edit is lost.
+    DisposableEffect(grid) {
+        onDispose {
+            if (revision != flushedRev.value) onContentChange(serializeGrid(grid))
+        }
+    }
+    fun markDirty() { revision++ }
 
     Column(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(8.dp))
@@ -169,7 +226,7 @@ internal fun SheetEditor(
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             singleLine = true,
-            readOnly = LocalReadOnly.current,
+            readOnly = readOnly,
             decorationBox = { inner ->
                 if (title.isEmpty()) {
                     Text(
@@ -187,8 +244,8 @@ internal fun SheetEditor(
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             SheetAxisLabel("R")
-            SheetCtrl(Icons.Rounded.Add, "Add row") { update(model.addRow()) }
-            SheetCtrl(Icons.Rounded.Remove, "Remove row") { update(model.removeRow()) }
+            SheetCtrl(Icons.Rounded.Add, "Add row") { grid.addRow(); markDirty() }
+            SheetCtrl(Icons.Rounded.Remove, "Remove row") { grid.removeRow(); markDirty() }
             Box(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
@@ -197,11 +254,11 @@ internal fun SheetEditor(
                     .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
             )
             SheetAxisLabel("C")
-            SheetCtrl(Icons.Rounded.Add, "Add column") { update(model.addColumn()) }
-            SheetCtrl(Icons.Rounded.Remove, "Remove column") { update(model.removeColumn()) }
+            SheetCtrl(Icons.Rounded.Add, "Add column") { grid.addColumn(); markDirty() }
+            SheetCtrl(Icons.Rounded.Remove, "Remove column") { grid.removeColumn(); markDirty() }
             Spacer(Modifier.weight(1f))
             Text(
-                text = "${model.cells.size} × ${model.columnWidths.size}",
+                text = "${grid.rowCount} × ${grid.colCount}",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -228,33 +285,35 @@ internal fun SheetEditor(
                             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                     )
-                    model.columnWidths.forEachIndexed { c, w ->
+                    for (c in 0 until grid.colCount) {
                         SheetColumnHeader(
                             label = columnLabel(c),
-                            width = w,
-                            onResize = { nw -> update(current.setColWidth(c, nw)) },
+                            width = grid.columnWidths[c],
+                            onResize = { nw -> grid.setColWidth(c, nw) },
+                            onResizeEnd = { markDirty() },
                         )
                     }
                 }
             }
-            items(count = model.cells.size, key = { it }) { r ->
-                val row = model.cells[r]
-                val rowH = model.rowHeights.getOrElse(r) { DEFAULT_ROW_H }
+            items(count = grid.rowCount, key = { it }) { r ->
+                val rowH = grid.rowHeights.getOrElse(r) { DEFAULT_ROW_H }
                 Row(Modifier.horizontalScroll(hScroll)) {
                     SheetRowHeader(
                         number = r + 1,
                         height = rowH,
-                        onResize = { nh -> update(current.setRowHeight(r, nh)) },
+                        onResize = { nh -> grid.setRowHeight(r, nh) },
+                        onResizeEnd = { markDirty() },
                     )
-                    row.forEachIndexed { c, cell ->
+                    val cols = grid.colCount
+                    for (c in 0 until cols) {
                         SheetCell(
-                            value = cell,
-                            width = model.columnWidths.getOrElse(c) { DEFAULT_COL_W },
+                            value = grid.cells[r].getOrElse(c) { "" },
+                            width = grid.columnWidths.getOrElse(c) { DEFAULT_COL_W },
                             height = rowH,
                             active = activeCell == (r to c),
                             onActivate = { activeCell = r to c },
                             onDeactivate = { if (activeCell == (r to c)) activeCell = null },
-                            onChange = { v -> update(current.setCell(r, c, v)) },
+                            onChange = { v -> grid.setCell(r, c, v); markDirty() },
                         )
                     }
                 }
@@ -265,7 +324,7 @@ internal fun SheetEditor(
 }
 
 @Composable
-private fun SheetColumnHeader(label: String, width: Int, onResize: (Int) -> Unit) {
+private fun SheetColumnHeader(label: String, width: Int, onResize: (Int) -> Unit, onResizeEnd: () -> Unit) {
     val density = LocalDensity.current
     val currentWidth by rememberUpdatedState(width)
     Box(
@@ -298,6 +357,7 @@ private fun SheetColumnHeader(label: String, width: Int, onResize: (Int) -> Unit
                             val delta = with(density) { acc.toDp().value }.toInt()
                             onResize((start + delta).coerceIn(50, 420))
                         },
+                        onDragEnd = { onResizeEnd() },
                     )
                 },
             contentAlignment = Alignment.Center,
@@ -339,7 +399,7 @@ private fun SheetAxisLabel(text: String) {
 }
 
 @Composable
-private fun SheetRowHeader(number: Int, height: Int, onResize: (Int) -> Unit) {
+private fun SheetRowHeader(number: Int, height: Int, onResize: (Int) -> Unit, onResizeEnd: () -> Unit) {
     val density = LocalDensity.current
     val currentHeight by rememberUpdatedState(height)
     Box(
@@ -372,6 +432,7 @@ private fun SheetRowHeader(number: Int, height: Int, onResize: (Int) -> Unit) {
                             val delta = with(density) { acc.toDp().value }.toInt()
                             onResize((start + delta).coerceIn(32, 260))
                         },
+                        onDragEnd = { onResizeEnd() },
                     )
                 },
         )

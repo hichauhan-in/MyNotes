@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.rememberScrollState
@@ -115,7 +116,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -284,6 +285,10 @@ fun HomeScreen(
         }
     }
 
+    // Shared across the empty and populated layouts so the filter row keeps its horizontal scroll
+    // position when a tab switches between empty and full (e.g. selecting Trash after deleting).
+    val filterScrollState = rememberScrollState()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -298,8 +303,10 @@ fun HomeScreen(
                 onQueryChange = viewModel::onQueryChanged,
                 selectedFilter = selectedFilter,
                 onFilterSelect = viewModel::onFilterChanged,
+                filterScrollState = filterScrollState,
                 currentBook = state.currentBook,
                 onExitBook = viewModel::goUp,
+                onBookOptions = { state.currentBook?.let { bookActionsFor = it } },
                 onCoffee = { showCoffeeSheet = true },
                 onOpenSettings = onOpenSettings,
             )
@@ -361,6 +368,7 @@ fun HomeScreen(
                     FilterChipsRow(
                         selected = selectedFilter,
                         onSelect = viewModel::onFilterChanged,
+                        scrollState = filterScrollState,
                     )
                     Spacer(Modifier.height(20.dp))
                 }
@@ -811,8 +819,10 @@ private fun EmptyHomeContent(
     onQueryChange: (String) -> Unit,
     selectedFilter: NoteFilter,
     onFilterSelect: (NoteFilter) -> Unit,
+    filterScrollState: ScrollState,
     currentBook: Folder?,
     onExitBook: () -> Unit,
+    onBookOptions: () -> Unit,
     onCoffee: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -827,13 +837,16 @@ private fun EmptyHomeContent(
             ),
     ) {
         HomeHeader(noteCount = noteCount, onCoffee = onCoffee, onOpenSettings = onOpenSettings)
-        Spacer(Modifier.height(18.dp))
+        // These gaps intentionally match the populated grid's spacing (its verticalItemSpacing adds
+        // ~14dp between the header/search/filter rows) so the top bar looks identical whether the
+        // tab is empty or full - never "compact" on an empty tab.
+        Spacer(Modifier.height(32.dp))
         SearchField(value = query, onValueChange = onQueryChange)
-        Spacer(Modifier.height(16.dp))
-        FilterChipsRow(selected = selectedFilter, onSelect = onFilterSelect)
+        Spacer(Modifier.height(30.dp))
+        FilterChipsRow(selected = selectedFilter, onSelect = onFilterSelect, scrollState = filterScrollState)
         if (selectedFilter == NoteFilter.ALL && currentBook != null) {
-            Spacer(Modifier.height(16.dp))
-            BookHeader(book = currentBook, onBack = onExitBook, onOptions = null)
+            Spacer(Modifier.height(34.dp))
+            BookHeader(book = currentBook, onBack = onExitBook, onOptions = onBookOptions)
         }
         // Centre the empty state in whatever space is left below the search + filters.
         Box(
@@ -1204,11 +1217,12 @@ private fun SearchField(
 private fun FilterChipsRow(
     selected: NoteFilter,
     onSelect: (NoteFilter) -> Unit,
+    scrollState: ScrollState = rememberScrollState(),
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
+            .horizontalScroll(scrollState),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         NoteFilter.entries.forEach { filter ->
@@ -1906,7 +1920,7 @@ private fun CoffeeOption(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = if (comingSoon) Modifier.blur(6.dp) else Modifier,
+            modifier = if (comingSoon) Modifier.alpha(0.45f) else Modifier,
         ) {
             Box(
                 modifier = Modifier
