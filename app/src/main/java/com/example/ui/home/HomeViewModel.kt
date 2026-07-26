@@ -39,6 +39,14 @@ data class BookItem(
     val subBookCount: Int,
 )
 
+/** Totals shown in the "delete this book and everything in it?" confirmation. */
+data class BookDeletionSummary(
+    val subBooks: Int,
+    val notes: Int,
+) {
+    val hasContent: Boolean get() = subBooks > 0 || notes > 0
+}
+
 data class HomeUiState(
     val filter: NoteFilter = NoteFilter.ALL,
     val query: String = "",
@@ -83,6 +91,10 @@ class HomeViewModel : ViewModel() {
     /** Every book, flat - used by the "move to book" picker. */
     val allFolders: StateFlow<List<Folder>> = folders.allFolders
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Snapshot of every note, used to summarise what a recursive book delete will remove. */
+    private val allNotesSnapshot: StateFlow<List<Note>> = repository.allNotes
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     fun addCustomTemplate(name: String, iconKey: String, content: String) = viewModelScope.launch {
         settings.addTemplate(CustomTemplate(name = name, iconKey = iconKey, content = content))
@@ -244,11 +256,36 @@ class HomeViewModel : ViewModel() {
     }
 
     fun deleteBook(id: String) {
-        if (_currentFolderId.value == id) {
-            val crumb = uiState.value.breadcrumb
-            _currentFolderId.value = if (crumb.size >= 2) crumb[crumb.size - 2].id else null
+        val all = allFolders.value
+        val subtree = subtreeIds(id, all)
+        // If we are currently inside the book being deleted (or a descendant), step out first.
+        if (_currentFolderId.value in subtree) {
+            _currentFolderId.value = all.firstOrNull { it.id == id }?.parentId
         }
-        viewModelScope.launch { folders.deleteFolder(id) }
+        clearSelection()
+        viewModelScope.launch { folders.deleteFolderTree(id) }
+    }
+
+    /** How many sub-books and notes a recursive delete of [id] would remove. */
+    fun bookDeletionSummary(id: String): BookDeletionSummary {
+        val subtree = subtreeIds(id, allFolders.value)
+        val notes = allNotesSnapshot.value.count { !it.isTrashed && it.folderId in subtree }
+        return BookDeletionSummary(subBooks = subtree.size - 1, notes = notes)
+    }
+
+    /** The id of [rootId] plus every book nested inside it, at any depth. */
+    private fun subtreeIds(rootId: String, all: List<Folder>): Set<String> {
+        val childrenByParent = all.groupBy { it.parentId }
+        val result = linkedSetOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(rootId)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (result.add(current)) {
+                childrenByParent[current]?.forEach { queue.add(it.id) }
+            }
+        }
+        return result
     }
 
     fun moveBook(id: String, newParentId: String?) = viewModelScope.launch {

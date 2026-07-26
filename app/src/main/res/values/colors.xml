@@ -7,4 +7,8 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Splash screen: pitch-black backdrop with a brand-purple disc behind the note mark. -->
+    <color name="splash_background">#FF000000</color>
+    <color name="splash_icon_disc">#FF6D5EF6</color>
 </resources>

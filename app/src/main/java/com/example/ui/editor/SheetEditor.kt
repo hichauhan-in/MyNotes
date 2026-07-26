@@ -55,10 +55,13 @@ private data class SheetModel(
     val cells: List<List<String>>,
 )
 
+private const val DEFAULT_COL_W = 150
+private const val DEFAULT_ROW_H = 34
+
 private fun defaultSheet(): SheetModel = SheetModel(
-    columnWidths = List(4) { 120 },
-    rowHeights = List(6) { 46 },
-    cells = List(6) { List(4) { "" } },
+    columnWidths = List(2) { DEFAULT_COL_W },
+    rowHeights = List(10) { DEFAULT_ROW_H },
+    cells = List(10) { List(2) { "" } },
 )
 
 private fun parseSheet(content: String): SheetModel = runCatching {
@@ -98,13 +101,13 @@ private fun SheetModel.setRowHeight(r: Int, h: Int): SheetModel =
     copy(rowHeights = rowHeights.mapIndexed { i, x -> if (i == r) h else x })
 
 private fun SheetModel.addRow(): SheetModel =
-    copy(rowHeights = rowHeights + 46, cells = cells + listOf(List(columnWidths.size) { "" }))
+    copy(rowHeights = rowHeights + DEFAULT_ROW_H, cells = cells + listOf(List(columnWidths.size) { "" }))
 
 private fun SheetModel.removeRow(): SheetModel =
     if (cells.size <= 1) this else copy(rowHeights = rowHeights.dropLast(1), cells = cells.dropLast(1))
 
 private fun SheetModel.addColumn(): SheetModel =
-    copy(columnWidths = columnWidths + 120, cells = cells.map { it + "" })
+    copy(columnWidths = columnWidths + DEFAULT_COL_W, cells = cells.map { it + "" })
 
 private fun SheetModel.removeColumn(): SheetModel =
     if (columnWidths.size <= 1) this
@@ -165,15 +168,17 @@ internal fun SheetEditor(
         )
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
+            SheetAxisLabel("C")
             SheetCtrl(Icons.Rounded.Add, "Add column") { update(model.addColumn()) }
             SheetCtrl(Icons.Rounded.Remove, "Remove column") { update(model.removeColumn()) }
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 6.dp)
+                    .padding(horizontal = 8.dp)
                     .height(20.dp)
                     .width(1.dp)
                     .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
             )
+            SheetAxisLabel("R")
             SheetCtrl(Icons.Rounded.Add, "Add row") { update(model.addRow()) }
             SheetCtrl(Icons.Rounded.Remove, "Remove row") { update(model.removeRow()) }
             Spacer(Modifier.weight(1f))
@@ -217,14 +222,14 @@ internal fun SheetEditor(
                     Row {
                         SheetRowHeader(
                             number = r + 1,
-                            height = model.rowHeights.getOrElse(r) { 46 },
+                            height = model.rowHeights.getOrElse(r) { DEFAULT_ROW_H },
                             onResize = { nh -> update(current.setRowHeight(r, nh)) },
                         )
                         row.forEachIndexed { c, cell ->
                             SheetCell(
                                 value = cell,
-                                width = model.columnWidths.getOrElse(c) { 120 },
-                                height = model.rowHeights.getOrElse(r) { 46 },
+                                width = model.columnWidths.getOrElse(c) { DEFAULT_COL_W },
+                                height = model.rowHeights.getOrElse(r) { DEFAULT_ROW_H },
                                 onChange = { v -> update(current.setCell(r, c, v)) },
                             )
                         }
@@ -258,7 +263,7 @@ private fun SheetColumnHeader(label: String, width: Int, onResize: (Int) -> Unit
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
-                .width(14.dp)
+                .width(16.dp)
                 .pointerInput(Unit) {
                     var start = 0
                     var acc = 0f
@@ -272,8 +277,42 @@ private fun SheetColumnHeader(label: String, width: Int, onResize: (Int) -> Unit
                         },
                     )
                 },
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            ColumnResizeHandle()
+        }
     }
+}
+
+/** Four dots at a column's right edge, hinting that the boundary can be dragged to resize. */
+@Composable
+private fun ColumnResizeHandle() {
+    val color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        repeat(2) {
+            Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                repeat(2) {
+                    Box(
+                        modifier = Modifier
+                            .size(2.5.dp)
+                            .clip(CircleShape)
+                            .background(color),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SheetAxisLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(end = 2.dp),
+    )
 }
 
 @Composable

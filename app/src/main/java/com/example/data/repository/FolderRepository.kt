@@ -47,6 +47,28 @@ class FolderRepository(
         folderDao.deleteFolderById(id)
     }
 
+    /**
+     * Delete a book together with everything nested inside it: all sub-books (at any depth)
+     * are removed and every note in the subtree is moved to Trash (recoverable during the
+     * retention window). Notes are detached from their book so a later restore lands them
+     * at the top level rather than in a book that no longer exists.
+     */
+    suspend fun deleteFolderTree(id: String) = withContext(Dispatchers.IO) {
+        val all = folderDao.getAllFoldersOnce()
+        val childrenByParent = all.groupBy { it.parentId }
+        val subtree = mutableListOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(id)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (subtree.contains(current)) continue
+            subtree.add(current)
+            childrenByParent[current]?.forEach { queue.add(it.id) }
+        }
+        noteDao.trashNotesInFolders(subtree, System.currentTimeMillis())
+        folderDao.deleteFoldersByIds(subtree)
+    }
+
     suspend fun moveNoteToFolder(noteId: String, folderId: String?) = withContext(Dispatchers.IO) {
         noteDao.setFolder(noteId, folderId, System.currentTimeMillis())
     }

@@ -21,14 +21,14 @@ never touches storage, and no account or login is ever required.
 - **Multi‑select** — long‑press to select multiple notes and pin / favorite / archive / trash them in bulk. A per‑note `⋮` menu handles single‑note actions.
 - **Distraction‑free editor** — debounced auto‑save, a Markdown formatting toolbar with **live styling** (bold / italic / headings render as you type), note color labels, and live word‑count / reading‑time stats.
 - **Rich blocks** — interactive **checklists**, **tables** (add / remove rows & columns, drag to resize), a list button (bullet / numbered / checklist) and a quote button (quotes / brackets / braces) that remember your last choice, all interleaved inline with text and media.
-- **Sheets** — a full-note spreadsheet with editable cells and **drag-resizable rows and columns**.
-- **Expenses** — a private budgeting dashboard: log income and where it goes (expenses / savings / investments) with a live allocation bar, plus your account balances.
+- **Sheets** — a full-note spreadsheet with editable cells and **drag-resizable rows and columns** (grab the dotted handle between column letters).
+- **Expenses** — a private, fully customisable budgeting dashboard: log income and build your own sections (rename, add, or remove Expenses / Savings / Investments / Accounts and any custom section you like) with a live allocation bar that updates what's still unallocated.
 - **Checklists** — turn a note into an interactive, checkable to‑do list with live progress.
 - **Image attachments** — insert photos from the **gallery** or capture live with the **camera**, placed **inline at your cursor** so text and images can be interleaved freely. Drag a corner to **resize** an image. Each note keeps its own private, on‑device copy (removed with the note); captures never leave the app unless you export them.
 - **Voice notes** — record audio straight into a note and play it back inline. Recordings are stored privately on‑device and deleted with the note.
-- **Books** — organise notes into nestable folders ("books"). Create a book from the + menu, open it to browse or add notes inside, and move single or multiple notes between books.
+- **Books** — organise notes into nestable folders ("books"). Create a book from the + menu, open it to browse or add notes inside, and move single or multiple notes between books. Deleting a book removes everything nested inside it (after a confirmation); its notes move to Trash so they can still be recovered.
 - **Tags** — label notes and search any tag to pull up every note that carries it.
-- **Reusable templates** — build your own note templates with custom icons and manage them in a tabbed New / Manage sheet.
+- **Reusable templates** — build your own note templates with custom icons, kept on a dedicated **templates button in the bottom-left corner** and managed in a tabbed New / Manage sheet.
 - **App lock** — optional unlock with **fingerprint, face, or device PIN** (biometric / device‑credential).
 - **Organization** — pin, favorite, archive, color labels, and a recoverable Trash.
 - **Optional encrypted cloud backup** — off by default; when enabled, only encrypted blobs are uploaded (keys never leave your device).

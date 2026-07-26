@@ -61,6 +61,7 @@ import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.Style
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Check
@@ -154,6 +155,7 @@ fun HomeScreen(
     val retentionDays by viewModel.trashRetentionDays.collectAsStateWithLifecycle()
     val customTemplates by viewModel.customTemplates.collectAsStateWithLifecycle()
     var fabExpanded by remember { mutableStateOf(false) }
+    var templatesExpanded by remember { mutableStateOf(false) }
     var actionNote by remember { mutableStateOf<Note?>(null) }
     var showCoffeeSheet by remember { mutableStateOf(false) }
     var showRetentionSheet by remember { mutableStateOf(false) }
@@ -164,6 +166,7 @@ fun HomeScreen(
     var bookActionsFor by remember { mutableStateOf<Folder?>(null) }
     var renameBookFor by remember { mutableStateOf<Folder?>(null) }
     var moveBookFor by remember { mutableStateOf<Folder?>(null) }
+    var deleteBookFor by remember { mutableStateOf<Folder?>(null) }
 
     val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
     val foldersById = remember(allFolders) { allFolders.associateBy { it.id } }
@@ -341,7 +344,7 @@ fun HomeScreen(
 
         // Dim scrim behind the expanded FAB menu.
         AnimatedVisibility(
-            visible = fabExpanded && !selectionMode,
+            visible = (fabExpanded || templatesExpanded) && !selectionMode,
             enter = fadeIn(),
             exit = fadeOut(),
         ) {
@@ -352,22 +355,43 @@ fun HomeScreen(
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
-                    ) { fabExpanded = false },
+                    ) {
+                        fabExpanded = false
+                        templatesExpanded = false
+                    },
             )
         }
 
         if (!selectionMode) {
+            TemplatesFab(
+                expanded = templatesExpanded,
+                onToggle = {
+                    templatesExpanded = !templatesExpanded
+                    fabExpanded = false
+                },
+                templates = customTemplates,
+                onTemplate = { templateId ->
+                    templatesExpanded = false
+                    onCreateNote("custom:$templateId", viewModel.creationFolderId())
+                },
+                onManage = {
+                    templatesExpanded = false
+                    showTemplateCreator = true
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 20.dp, bottom = insets.calculateBottomPadding() + 29.dp),
+            )
+
             ExpandableFab(
                 expanded = fabExpanded,
-                onToggle = { fabExpanded = !fabExpanded },
+                onToggle = {
+                    fabExpanded = !fabExpanded
+                    templatesExpanded = false
+                },
                 onAction = { template ->
                     fabExpanded = false
                     onCreateNote(template, viewModel.creationFolderId())
-                },
-                customTemplates = customTemplates,
-                onCreateTemplate = {
-                    fabExpanded = false
-                    showTemplateCreator = true
                 },
                 onCreateBook = {
                     fabExpanded = false
@@ -521,9 +545,21 @@ fun HomeScreen(
             },
             onDelete = {
                 bookActionsFor = null
-                viewModel.deleteBook(book.id)
+                deleteBookFor = book
             },
             onDismiss = { bookActionsFor = null },
+        )
+    }
+
+    deleteBookFor?.let { book ->
+        DeleteBookDialog(
+            book = book,
+            summary = viewModel.bookDeletionSummary(book.id),
+            onConfirm = {
+                viewModel.deleteBook(book.id)
+                deleteBookFor = null
+            },
+            onDismiss = { deleteBookFor = null },
         )
     }
 }
@@ -1107,8 +1143,6 @@ private fun ExpandableFab(
     expanded: Boolean,
     onToggle: () -> Unit,
     onAction: (template: String?) -> Unit,
-    customTemplates: List<CustomTemplate>,
-    onCreateTemplate: () -> Unit,
     onCreateBook: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1125,14 +1159,6 @@ private fun ExpandableFab(
             exit = fadeOut() + slideOutVertically { it / 2 } + scaleOut(targetScale = 0.8f),
         ) {
             Column(horizontalAlignment = Alignment.End) {
-                FabAction("Manage templates", Icons.Rounded.Style) { onCreateTemplate() }
-                Spacer(Modifier.height(12.dp))
-                customTemplates.forEach { template ->
-                    FabAction(template.name, templateIcon(template.iconKey)) {
-                        onAction("custom:${template.id}")
-                    }
-                    Spacer(Modifier.height(12.dp))
-                }
                 FabAction("New book", Icons.Rounded.CreateNewFolder) { onCreateBook() }
                 Spacer(Modifier.height(12.dp))
                 FabAction("Sheet", Icons.Rounded.GridOn) { onAction("sheet") }
@@ -1175,28 +1201,25 @@ private fun ExpandableFab(
 private fun FabAction(
     label: String,
     icon: ImageVector,
+    iconStart: Boolean = false,
     onClick: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.clickable(
-            interactionSource = remember { MutableInteractionSource() },
-            indication = null,
-            onClick = onClick,
-        ),
-    ) {
+    val chip: @Composable () -> Unit = {
         Text(
             text = label,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         )
-        Spacer(Modifier.width(12.dp))
+    }
+    val iconTile: @Composable () -> Unit = {
         Box(
             modifier = Modifier
                 .size(48.dp)
@@ -1210,6 +1233,82 @@ private fun FabAction(
                 contentDescription = label,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(22.dp),
+            )
+        }
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.clickable(
+            interactionSource = remember { MutableInteractionSource() },
+            indication = null,
+            onClick = onClick,
+        ),
+    ) {
+        if (iconStart) {
+            iconTile()
+            Spacer(Modifier.width(12.dp))
+            chip()
+        } else {
+            chip()
+            Spacer(Modifier.width(12.dp))
+            iconTile()
+        }
+    }
+}
+
+/**
+ * The smaller companion FAB on the bottom-left. It keeps user templates out of the "+" menu:
+ * tapping a template opens a new note from it, and "Manage templates" opens the editor sheet.
+ */
+@Composable
+private fun TemplatesFab(
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    templates: List<CustomTemplate>,
+    onTemplate: (String) -> Unit,
+    onManage: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val neu = LocalNeuColors.current
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.Start,
+    ) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn() + slideInVertically { it / 2 } + scaleIn(initialScale = 0.8f),
+            exit = fadeOut() + slideOutVertically { it / 2 } + scaleOut(targetScale = 0.8f),
+        ) {
+            Column(horizontalAlignment = Alignment.Start) {
+                templates.forEach { template ->
+                    FabAction(template.name, templateIcon(template.iconKey), iconStart = true) {
+                        onTemplate(template.id)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                }
+                FabAction("Manage templates", Icons.Rounded.Tune, iconStart = true) { onManage() }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .neumorphicRaised(26.dp, neu, elevation = 8.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onToggle,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Style,
+                contentDescription = "Templates",
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
             )
         }
     }
@@ -1795,7 +1894,7 @@ private fun BookActionsSheet(
             SheetAction(Icons.Rounded.Delete, "Delete book", destructive = true) { onDelete() }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "Deleting a book keeps its notes - they move up to the parent.",
+                text = "Deleting a book also deletes everything nested inside it. Its notes move to Trash so you can still recover them.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 8.dp),
@@ -1803,6 +1902,57 @@ private fun BookActionsSheet(
         }
     }
 }
+
+@Composable
+private fun DeleteBookDialog(
+    book: Folder,
+    summary: BookDeletionSummary,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val insideText = when {
+        summary.subBooks > 0 && summary.notes > 0 ->
+            "${plural(summary.subBooks, "sub-book")} and ${plural(summary.notes, "note")} inside it will also be deleted."
+        summary.subBooks > 0 -> "${plural(summary.subBooks, "sub-book")} inside it will also be deleted."
+        summary.notes > 0 -> "${plural(summary.notes, "note")} inside it will also be deleted."
+        else -> "This book is empty."
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Rounded.DeleteForever,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+            )
+        },
+        title = { Text("Delete \"${book.name}\"?") },
+        text = {
+            Text(
+                text = if (summary.hasContent) {
+                    "$insideText Deleted notes are moved to Trash and can be restored; the books themselves can't be brought back."
+                } else {
+                    "This book will be deleted."
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = if (summary.hasContent) "Delete everything" else "Delete",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+private fun plural(count: Int, noun: String): String =
+    "$count $noun" + if (count == 1) "" else "s"
 
 private val templateIconOptions: List<Pair<String, ImageVector>> = listOf(
     "note" to Icons.Rounded.EditNote,
@@ -1870,7 +2020,7 @@ private fun TemplateManagerSheet(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Reusable drafts that show up in the + menu.",
+                text = "Reusable drafts. They appear on the templates button in the bottom-left corner.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

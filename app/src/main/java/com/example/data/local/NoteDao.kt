@@ -38,6 +38,13 @@ interface NoteDao {
     @Query("UPDATE notes SET folderId = :newFolderId WHERE folderId = :oldFolderId")
     suspend fun reparentNotes(oldFolderId: String, newFolderId: String?)
 
+    /** Trash every note that lives in any of the given books (used when a book is deleted). */
+    @Query(
+        "UPDATE notes SET isTrashed = 1, isPinned = 0, folderId = NULL, updatedAt = :updatedAt " +
+            "WHERE folderId IN (:folderIds)",
+    )
+    suspend fun trashNotesInFolders(folderIds: List<String>, updatedAt: Long)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNoteById(id: String)
 
@@ -59,6 +66,9 @@ interface FolderDao {
     @Query("SELECT * FROM folders ORDER BY name ASC")
     fun getAllFolders(): Flow<List<FolderEntity>>
 
+    @Query("SELECT * FROM folders")
+    suspend fun getAllFoldersOnce(): List<FolderEntity>
+
     @Query("SELECT * FROM folders WHERE id = :id")
     suspend fun getFolderById(id: String): FolderEntity?
 
@@ -76,4 +86,8 @@ interface FolderDao {
 
     @Query("DELETE FROM folders WHERE id = :id")
     suspend fun deleteFolderById(id: String)
+
+    /** Delete a whole set of books at once (a book plus its entire nested subtree). */
+    @Query("DELETE FROM folders WHERE id IN (:ids)")
+    suspend fun deleteFoldersByIds(ids: List<String>)
 }
