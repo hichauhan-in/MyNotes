@@ -73,4 +73,35 @@ object EncryptionManager {
             null
         }
     }
+
+    /**
+     * Encrypts raw [plain] bytes (e.g. an image or audio attachment) and returns a self-contained
+     * blob laid out as `IV || ciphertext`. Used for binary payloads where the String helpers above
+     * (which Base64-encode) would waste space.
+     */
+    fun encryptBytes(plain: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, getSecretKey())
+        val iv = cipher.iv
+        val encrypted = cipher.doFinal(plain)
+        return ByteArray(iv.size + encrypted.size).also {
+            System.arraycopy(iv, 0, it, 0, iv.size)
+            System.arraycopy(encrypted, 0, it, iv.size, encrypted.size)
+        }
+    }
+
+    /**
+     * Reverses [encryptBytes] on an `IV || ciphertext` [blob], or returns null if it can't be
+     * decrypted with the current key. Returning null (never garbage) lets callers fall back to
+     * treating the data as legacy plaintext instead of corrupting it.
+     */
+    fun decryptBytes(blob: ByteArray): ByteArray? = try {
+        val iv = blob.copyOfRange(0, GCM_IV_LENGTH)
+        val encrypted = blob.copyOfRange(GCM_IV_LENGTH, blob.size)
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), GCMParameterSpec(128, iv))
+        cipher.doFinal(encrypted)
+    } catch (e: Exception) {
+        null
+    }
 }

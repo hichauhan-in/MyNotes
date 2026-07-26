@@ -201,6 +201,7 @@ fun SettingsScreen(
             SettingsSection(title = "Export", icon = Icons.Rounded.FolderOpen) {
                 val exportContext = LocalContext.current
                 val exportFolder = settings.defaultExportFolder
+                val supportsDownloads = android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q
                 val exportPicker = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocumentTree(),
                 ) { uri ->
@@ -217,7 +218,8 @@ fun SettingsScreen(
                 SettingsLinkRow(
                     icon = Icons.Rounded.FolderOpen,
                     title = "Default export folder",
-                    subtitle = exportFolder?.let { exportFolderLabel(it) } ?: "Ask each time when exporting",
+                    subtitle = exportFolder?.let { exportFolderLabel(it) }
+                        ?: if (supportsDownloads) "Downloads/MyNotes (default)" else "Ask each time when exporting",
                     trailingIcon = Icons.Rounded.Edit,
                     onClick = { runCatching { exportPicker.launch(null) } },
                 )
@@ -225,16 +227,16 @@ fun SettingsScreen(
                     SettingsDivider()
                     SettingsLinkRow(
                         icon = Icons.Rounded.Close,
-                        title = "Clear default folder",
-                        subtitle = "Go back to choosing a location each time",
+                        title = "Reset to default",
+                        subtitle = if (supportsDownloads) "Go back to saving in Downloads/MyNotes" else "Go back to choosing a location each time",
                         onClick = { viewModel.setDefaultExportFolder(null) },
                     )
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "Notes export as text, Markdown, HTML or PDF; a book exports as a ZIP that " +
-                        "keeps its folder structure and attachments. Files save to this folder, or you'll " +
-                        "be asked where to save each time.",
+                        "keeps its folder structure and attachments. By default files are saved to your " +
+                        "Downloads/MyNotes folder - pick a different folder above to change that.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp),

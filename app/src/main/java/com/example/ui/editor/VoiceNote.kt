@@ -1,6 +1,7 @@
 package com.example.ui.editor
 
 import android.content.Context
+import android.media.MediaDataSource
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -58,6 +59,20 @@ import java.io.File
 private fun createRecorder(context: Context): MediaRecorder =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context)
     else @Suppress("DEPRECATION") MediaRecorder()
+
+/** Feeds MediaPlayer from decrypted bytes held in memory, so no plaintext audio touches disk. */
+private class BytesMediaDataSource(private val data: ByteArray) : MediaDataSource() {
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (position >= data.size) return -1
+        val len = minOf(size, data.size - position.toInt())
+        System.arraycopy(data, position.toInt(), buffer, offset, len)
+        return len
+    }
+
+    override fun getSize(): Long = data.size.toLong()
+
+    override fun close() {}
+}
 
 private fun formatClock(totalSeconds: Int): String =
     "${totalSeconds / 60}:${(totalSeconds % 60).toString().padStart(2, '0')}"
@@ -196,18 +211,22 @@ internal fun VoiceRecorderSheet(
 
 /** An inline, playable voice-note attachment card shown in the editor. */
 @Composable
-internal fun AudioAttachment(file: File, onRemove: () -> Unit) {
+internal fun AudioAttachment(name: String, onRemove: () -> Unit) {
+    val context = LocalContext.current
     val neu = LocalNeuColors.current
     var playing by remember { mutableStateOf(false) }
     var durationSec by remember { mutableStateOf(0) }
+    var audioBytes by remember(name) { mutableStateOf<ByteArray?>(null) }
     val player = remember { MediaPlayer() }
     val readOnly = LocalReadOnly.current
 
-    LaunchedEffect(file) {
-        val ms = withContext(Dispatchers.IO) {
+    LaunchedEffect(name) {
+        val bytes = withContext(Dispatchers.IO) { AttachmentStore.readDecrypted(context, name) }
+        audioBytes = bytes
+        val ms = if (bytes == null) 0 else withContext(Dispatchers.IO) {
             runCatching {
                 val probe = MediaPlayer()
-                probe.setDataSource(file.absolutePath)
+                probe.setDataSource(BytesMediaDataSource(bytes))
                 probe.prepare()
                 val d = probe.duration
                 probe.release()
@@ -236,13 +255,14 @@ internal fun AudioAttachment(file: File, onRemove: () -> Unit) {
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primary)
                 .clickable {
+                    val bytes = audioBytes
                     if (playing) {
                         runCatching { player.pause() }
                         playing = false
-                    } else {
+                    } else if (bytes != null) {
                         runCatching {
                             player.reset()
-                            player.setDataSource(file.absolutePath)
+                            player.setDataSource(BytesMediaDataSource(bytes))
                             player.setOnCompletionListener { playing = false }
                             player.prepare()
                             player.start()

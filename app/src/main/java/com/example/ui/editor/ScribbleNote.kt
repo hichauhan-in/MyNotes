@@ -72,6 +72,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -213,8 +215,10 @@ internal fun ScribbleEditor(
     meta: @Composable () -> Unit = {},
 ) {
     val neu = LocalNeuColors.current
-    var model by remember { mutableStateOf(parseWb(content)) }
-    LaunchedEffect(seedKey) { model = parseWb(content) }
+    // Parse off the main thread so opening a whiteboard with thousands of strokes never blocks the
+    // screen-open animation; the board starts empty and fills in a frame or two later.
+    var model by remember { mutableStateOf(emptyWb()) }
+    LaunchedEffect(seedKey) { model = withContext(Dispatchers.Default) { parseWb(content) } }
     var mode by remember { mutableStateOf(WbMode.DRAW) }
     var penWidth by remember { mutableStateOf(4f) }
     var penColor by remember { mutableStateOf(0) }
@@ -324,11 +328,17 @@ internal fun ScribbleEditor(
                             transformOrigin = TransformOrigin(0f, 0f)
                         },
                 ) {
+                    // Committed strokes only redraw when a stroke is FINISHED - not on every
+                    // pointer move - so drawing on a whiteboard with thousands of strokes stays smooth.
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         model.strokes.forEach { stroke ->
                             val c = if (stroke.color == 0) defaultStrokeColor else Color(stroke.color)
                             drawWbStroke(stroke.points, c, stroke.width)
                         }
+                    }
+                    // The in-progress stroke lives on its own overlay: each new point only repaints
+                    // this single stroke, never the whole board.
+                    Canvas(modifier = Modifier.fillMaxSize()) {
                         if (livePoints.isNotEmpty()) drawWbStroke(livePoints.toList(), liveColor, penWidth)
                     }
                     model.texts.forEach { textNote ->

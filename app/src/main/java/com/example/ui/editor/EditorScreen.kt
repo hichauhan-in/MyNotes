@@ -11,6 +11,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.updateTransition
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -22,10 +30,14 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -42,12 +54,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
@@ -90,12 +102,14 @@ import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material.icons.rounded.Title
 import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -110,7 +124,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -121,6 +134,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -141,13 +156,17 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.data.attachments.AttachmentStore
+import com.example.data.attachments.EncAttachment
 import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
@@ -167,6 +186,7 @@ import java.io.File
 import java.util.UUID
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -369,7 +389,15 @@ fun EditorScreen(
         ActivityResultContracts.TakePicture(),
     ) { success ->
         val file = pendingCameraFile
-        if (success && file != null) insertImageAtCursor(file.name) else file?.delete()
+        if (success && file != null) {
+            // The camera writes plaintext into our file; encrypt it at rest before showing it.
+            scope.launch {
+                withContext(Dispatchers.IO) { AttachmentStore.encryptFileInPlace(context, file.name) }
+                insertImageAtCursor(file.name)
+            }
+        } else {
+            file?.delete()
+        }
         pendingCameraFile = null
     }
 
@@ -397,6 +425,14 @@ fun EditorScreen(
             ExportIO.writeBytes(context, uri, Exporter.noteBytes(note, format))
         }
 
+    // Same content, but written straight into the public Downloads/MyNotes folder (no picker).
+    fun writeNoteToDownloads(note: Note, format: ExportFormat, fileName: String, mime: String): Boolean =
+        if (note.attachments.isNotEmpty()) {
+            ExportIO.writeToDownloads(context, fileName, mime) { out -> Exporter.writeNoteZip(context, note, format, out) } != null
+        } else {
+            ExportIO.writeToDownloads(context, fileName, mime, Exporter.noteBytes(note, format)) != null
+        }
+
     val exportDocLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("*/*"),
     ) { uri ->
@@ -422,50 +458,86 @@ fun EditorScreen(
         val mime = if (zipped) "application/zip" else format.mime
         val fileName = "${Exporter.noteFileBase(note)}.$ext"
         val folder = defaultExportFolder
-        if (folder != null) {
-            scope.launch {
-                val ok = withContext(Dispatchers.IO) {
-                    val target = ExportIO.createInTree(context, folder, fileName, mime)
-                    target != null && writeNoteExport(target, note, format)
-                }
-                if (ok) {
-                    android.widget.Toast.makeText(context, "Exported to your folder", android.widget.Toast.LENGTH_SHORT).show()
-                } else {
-                    // Saved folder unavailable - fall back to the picker.
-                    pendingExportFormat = format
-                    runCatching { exportDocLauncher.launch(fileName) }
+        when {
+            // 1) A folder the user explicitly picked in Settings wins.
+            folder != null -> {
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) {
+                        val target = ExportIO.createInTree(context, folder, fileName, mime)
+                        target != null && writeNoteExport(target, note, format)
+                    }
+                    if (ok) {
+                        android.widget.Toast.makeText(context, "Exported to your folder", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        // Saved folder unavailable - fall back to the picker.
+                        pendingExportFormat = format
+                        runCatching { exportDocLauncher.launch(fileName) }
+                    }
                 }
             }
-        } else {
-            pendingExportFormat = format
-            runCatching { exportDocLauncher.launch(fileName) }
+            // 2) Default: drop it straight into Downloads/MyNotes (no permission on Android 10+).
+            ExportIO.supportsDownloadsExport -> {
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) { writeNoteToDownloads(note, format, fileName, mime) }
+                    if (ok) {
+                        android.widget.Toast.makeText(context, "Saved to Downloads/MyNotes", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        pendingExportFormat = format
+                        runCatching { exportDocLauncher.launch(fileName) }
+                    }
+                }
+            }
+            // 3) Older devices without scoped storage: ask where to save.
+            else -> {
+                pendingExportFormat = format
+                runCatching { exportDocLauncher.launch(fileName) }
+            }
         }
     }
 
-    // Seed the editable fields once the note has been loaded / created.
+    // Seed the editable fields once the note has been loaded / created. Heavy parsing (a giant
+    // note with hundreds of blocks) runs off the main thread; a loader appears only if it's slow
+    // enough to notice, so ordinary notes open instantly with no flicker.
+    var bodyReady by remember(state.id) { mutableStateOf(false) }
+    var showBodyLoader by remember(state.id) { mutableStateOf(false) }
     LaunchedEffect(state.id) {
+        launch {
+            delay(140)
+            if (!bodyReady) showBodyLoader = true
+        }
         titleField = TextFieldValue(state.title, TextRange(state.title.length))
-        if (state.type == NoteType.CHECKLIST) {
-            checklistItems.clear()
-            ChecklistUtil.parse(state.content).forEach {
-                checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), it.text, it.checked))
-            }
-            if (checklistItems.isEmpty()) {
-                checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
-            }
-        } else if (state.type != NoteType.SHEET && state.type != NoteType.EXPENSE && state.type != NoteType.SCRIBBLE) {
-            val parsed = parseContentToBlocks(state.content).toMutableList()
-            // Migrate legacy notes whose images were kept only in `attachments`.
-            if (parsed.none { it is ImageBlock } && state.attachments.isNotEmpty()) {
-                state.attachments.forEach { name ->
-                    parsed.add(ImageBlock(newBlockId(), name))
-                    parsed.add(TextBlock(newBlockId(), TextFieldValue("")))
+        when (state.type) {
+            NoteType.CHECKLIST -> {
+                val parsed = withContext(Dispatchers.Default) { ChecklistUtil.parse(state.content) }
+                checklistItems.clear()
+                parsed.forEach {
+                    checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), it.text, it.checked))
+                }
+                if (checklistItems.isEmpty()) {
+                    checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
                 }
             }
-            blocks.clear()
-            blocks.addAll(parsed)
-            focusedBlockId = parsed.firstOrNull { it is TextBlock }?.id
+            NoteType.SHEET, NoteType.EXPENSE, NoteType.SCRIBBLE -> {
+                // These types parse inside their own editors.
+            }
+            else -> {
+                val parsed = withContext(Dispatchers.Default) {
+                    parseContentToBlocks(state.content).toMutableList()
+                }
+                // Migrate legacy notes whose images were kept only in `attachments`.
+                if (parsed.none { it is ImageBlock } && state.attachments.isNotEmpty()) {
+                    state.attachments.forEach { name ->
+                        parsed.add(ImageBlock(newBlockId(), name))
+                        parsed.add(TextBlock(newBlockId(), TextFieldValue("")))
+                    }
+                }
+                blocks.clear()
+                blocks.addAll(parsed)
+                focusedBlockId = parsed.firstOrNull { it is TextBlock }?.id
+            }
         }
+        bodyReady = true
+        showBodyLoader = false
     }
 
     fun pushChecklist() {
@@ -525,25 +597,29 @@ fun EditorScreen(
         }
 
         when (state.type) {
-            NoteType.SHEET -> SheetEditor(
-                seedKey = state.id,
-                title = state.title,
-                content = state.content,
-                onTitleChange = viewModel::onTitleChanged,
-                onContentChange = viewModel::onContentChanged,
-                meta = metaBar,
-                modifier = Modifier.weight(1f),
-            )
+            NoteType.SHEET -> DeferredEditorBody(modifier = Modifier.weight(1f)) {
+                SheetEditor(
+                    seedKey = state.id,
+                    title = state.title,
+                    content = state.content,
+                    onTitleChange = viewModel::onTitleChanged,
+                    onContentChange = viewModel::onContentChanged,
+                    meta = metaBar,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
-            NoteType.EXPENSE -> ExpenseEditor(
-                seedKey = state.id,
-                title = state.title,
-                content = state.content,
-                onTitleChange = viewModel::onTitleChanged,
-                onContentChange = viewModel::onContentChanged,
-                meta = metaBar,
-                modifier = Modifier.weight(1f),
-            )
+            NoteType.EXPENSE -> DeferredEditorBody(modifier = Modifier.weight(1f)) {
+                ExpenseEditor(
+                    seedKey = state.id,
+                    title = state.title,
+                    content = state.content,
+                    onTitleChange = viewModel::onTitleChanged,
+                    onContentChange = viewModel::onContentChanged,
+                    meta = metaBar,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
             NoteType.SCRIBBLE -> ScribbleEditor(
                 seedKey = state.id,
@@ -556,13 +632,19 @@ fun EditorScreen(
             )
 
             else -> {
-        Column(
+        if (showBodyLoader && !bodyReady) {
+            EditorBodyLoader(modifier = Modifier.weight(1f).fillMaxWidth())
+        } else {
+        // A LazyColumn virtualises the note body, so a huge note (hundreds of blocks, scribbles,
+        // tables, checklists) only ever composes what's on screen - it can't jank or run out of memory.
+        LazyColumn(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 22.dp),
+                .fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 22.dp),
         ) {
+            item(key = "editor-header") {
+              Column(Modifier.fillMaxWidth()) {
             Spacer(Modifier.height(8.dp))
             BasicTextField(
                 value = titleField,
@@ -612,14 +694,45 @@ fun EditorScreen(
             }
 
             Spacer(Modifier.height(16.dp))
+              }
+            }
             if (state.type == NoteType.CHECKLIST) {
-                ChecklistBody(
-                    items = checklistItems,
-                    onChanged = { pushChecklist() },
-                )
+                items(checklistItems, key = { it.id }) { item ->
+                    ChecklistRow(
+                        item = item,
+                        onToggle = {
+                            val i = checklistItems.indexOfFirst { it.id == item.id }
+                            if (i >= 0) {
+                                checklistItems[i] = checklistItems[i].copy(checked = !checklistItems[i].checked)
+                                pushChecklist()
+                            }
+                        },
+                        onTextChange = { text ->
+                            val i = checklistItems.indexOfFirst { it.id == item.id }
+                            if (i >= 0) {
+                                checklistItems[i] = checklistItems[i].copy(text = text)
+                                pushChecklist()
+                            }
+                        },
+                        onDelete = {
+                            checklistItems.removeAll { it.id == item.id }
+                            if (checklistItems.isEmpty()) {
+                                checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
+                            }
+                            pushChecklist()
+                        },
+                    )
+                }
+                item(key = "checklist-add") {
+                    ChecklistAddRow(
+                        onClick = {
+                            checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
+                            pushChecklist()
+                        },
+                    )
+                }
             } else {
-                blocks.forEachIndexed { index, block ->
-                    key(block.id) {
+                itemsIndexed(blocks, key = { _, block -> block.id }) { index, block ->
                         when (block) {
                             is TextBlock -> EditorTextBlock(
                                 value = block.value,
@@ -631,7 +744,7 @@ fun EditorScreen(
 
                             is ImageBlock -> {
                                 ResizableAttachmentImage(
-                                    file = AttachmentStore.fileFor(context, block.fileName),
+                                    name = block.fileName,
                                     widthFraction = (block.widthPercent ?: 100) / 100f,
                                     onWidthChange = { pct -> resizeImageBlock(block.id, pct) },
                                     onRemove = { removeBlock(block.id) },
@@ -642,7 +755,7 @@ fun EditorScreen(
 
                             is AudioBlock -> {
                                 AudioAttachment(
-                                    file = AttachmentStore.fileFor(context, block.fileName),
+                                    name = block.fileName,
                                     onRemove = { removeBlock(block.id) },
                                 )
                                 Spacer(Modifier.height(12.dp))
@@ -687,10 +800,10 @@ fun EditorScreen(
                                 Spacer(Modifier.height(12.dp))
                             }
                         }
-                    }
                 }
             }
-            Spacer(Modifier.height(24.dp))
+            item(key = "editor-footer") { Spacer(Modifier.height(24.dp)) }
+        }
         }
 
         if (state.templateMode) {
@@ -774,8 +887,13 @@ fun EditorScreen(
     if (showVoiceRecorder) {
         VoiceRecorderSheet(
             onSave = { fileName ->
-                insertAudioAtCursor(fileName)
                 showVoiceRecorder = false
+                // Encrypt the freshly-recorded file at rest before it's inserted. Runs on the
+                // editor's scope (not the sheet's) so it can't be cancelled by the sheet closing.
+                scope.launch {
+                    withContext(Dispatchers.IO) { AttachmentStore.encryptFileInPlace(context, fileName) }
+                    insertAudioAtCursor(fileName)
+                }
             },
             onCancel = { showVoiceRecorder = false },
         )
@@ -819,7 +937,7 @@ fun EditorScreen(
 
     cropImageBlock?.let { imageBlock ->
         ImageCropDialog(
-            file = AttachmentStore.fileFor(context, imageBlock.fileName),
+            name = imageBlock.fileName,
             onCropped = { newName ->
                 replaceImageFile(imageBlock.id, newName)
                 cropImageBlock = null
@@ -886,6 +1004,7 @@ private fun EditorOverflowMenu(
     onDelete: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
     Box {
         NeuIconButton(
             icon = Icons.Rounded.MoreVert,
@@ -893,23 +1012,172 @@ private fun EditorOverflowMenu(
             onClick = { open = true },
             size = 44.dp,
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text("Share") },
-                leadingIcon = { Icon(Icons.Rounded.Share, contentDescription = null) },
-                onClick = { open = false; onShare() },
+        // Keep the popup mounted while it animates open OR closed so the exit animation can play.
+        val transitionState = remember { MutableTransitionState(false) }
+        transitionState.targetState = open
+        if (transitionState.currentState || transitionState.targetState) {
+            // Sit the menu 8dp below the button, right edges aligned - a clear, deliberate gap
+            // instead of the stock menu that glues itself to the icon.
+            val gapPx = with(density) { (44.dp + 8.dp).roundToPx() }
+            Popup(
+                alignment = Alignment.TopEnd,
+                offset = IntOffset(0, gapPx),
+                onDismissRequest = { open = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                val transition = updateTransition(transitionState, label = "overflowMenu")
+                val scale by transition.animateFloat(
+                    transitionSpec = {
+                        if (targetState) {
+                            spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow)
+                        } else {
+                            tween(durationMillis = 130, easing = FastOutLinearInEasing)
+                        }
+                    },
+                    label = "scale",
+                ) { state -> if (state) 1f else 0.82f }
+                val alpha by transition.animateFloat(
+                    transitionSpec = { tween(durationMillis = if (targetState) 150 else 110) },
+                    label = "alpha",
+                ) { state -> if (state) 1f else 0f }
+
+                OverflowMenuCard(
+                    modifier = Modifier.graphicsLayer {
+                        this.alpha = alpha
+                        scaleX = scale
+                        scaleY = scale
+                        // Grow out of the button (top-right corner).
+                        transformOrigin = TransformOrigin(1f, 0f)
+                    },
+                    onShare = { open = false; onShare() },
+                    onExport = { open = false; onExport() },
+                    onDelete = { open = false; onDelete() },
+                )
+            }
+        }
+    }
+}
+
+/** The floating card body of the overflow menu, styled to match the app's soft surfaces. */
+@Composable
+private fun OverflowMenuCard(
+    modifier: Modifier = Modifier,
+    onShare: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val neu = LocalNeuColors.current
+    Surface(
+        modifier = modifier.widthIn(min = 200.dp),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 10.dp,
+        tonalElevation = 2.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .border(1.dp, neu.highlight.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
+                .padding(6.dp),
+        ) {
+            OverflowMenuRow(
+                icon = Icons.Rounded.Share,
+                label = "Share",
+                onClick = onShare,
             )
-            DropdownMenuItem(
-                text = { Text("Export") },
-                leadingIcon = { Icon(Icons.Rounded.FileDownload, contentDescription = null) },
-                onClick = { open = false; onExport() },
+            OverflowMenuRow(
+                icon = Icons.Rounded.FileDownload,
+                label = "Export",
+                onClick = onExport,
             )
-            DropdownMenuItem(
-                text = { Text("Move to Trash", color = MaterialTheme.colorScheme.error) },
-                leadingIcon = {
-                    Icon(Icons.Rounded.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                },
-                onClick = { open = false; onDelete() },
+            OverflowMenuRow(
+                icon = Icons.Rounded.Delete,
+                label = "Move to Trash",
+                tint = MaterialTheme.colorScheme.error,
+                onClick = onDelete,
+            )
+        }
+    }
+}
+
+/** A single tappable row inside [OverflowMenuCard]. */
+@Composable
+private fun OverflowMenuRow(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    tint: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(14.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = tint,
+        )
+    }
+}
+
+/**
+ * Delays composing a heavy editor body (Sheets grid / Expense cards) for a beat and fades it in,
+ * so the screen-open animation runs on a light first frame and never stutters. Lighter editors
+ * (text, checklist, scribble) don't need this because they compose cheaply.
+ */
+@Composable
+private fun DeferredEditorBody(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(150)
+        visible = true
+    }
+    val alpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 220),
+        label = "editorBodyFade",
+    )
+    Box(modifier) {
+        if (visible) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { this.alpha = alpha },
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+/** A calm, centered loader shown only while a genuinely large note is being prepared. */
+@Composable
+private fun EditorBodyLoader(modifier: Modifier = Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 3.dp,
+                modifier = Modifier.size(38.dp),
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "Preparing your note…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -1901,7 +2169,7 @@ private fun markdownVisualTransformation(markerColor: Color, highlightColor: Col
 
 @Composable
 private fun ResizableAttachmentImage(
-    file: File,
+    name: String,
     widthFraction: Float,
     onWidthChange: (Int) -> Unit,
     onRemove: () -> Unit,
@@ -1915,10 +2183,10 @@ private fun ResizableAttachmentImage(
         var fraction by remember { mutableStateOf(widthFraction) }
         LaunchedEffect(widthFraction) { fraction = widthFraction }
         // Decode once at the full container width so resizing just scales the cached bitmap
-        // (no re-decode flicker mid-drag).
-        val request = remember(file.path, maxWidthPx) {
+        // (no re-decode flicker mid-drag). The image is decrypted off-main inside Coil.
+        val request = remember(name, maxWidthPx) {
             ImageRequest.Builder(context)
-                .data(file)
+                .data(EncAttachment(name))
                 .size(maxWidthPx.roundToInt().coerceAtLeast(1))
                 .build()
         }
@@ -2076,50 +2344,15 @@ private fun ChecklistProgress(done: Int, total: Int) {
 }
 
 @Composable
-private fun ChecklistBody(
-    items: SnapshotStateList<UiChecklistItem>,
-    onChanged: () -> Unit,
-) {
+private fun ChecklistAddRow(onClick: () -> Unit) {
     val readOnly = LocalReadOnly.current
     Column(modifier = Modifier.fillMaxWidth()) {
-        items.forEach { item ->
-            key(item.id) {
-                ChecklistRow(
-                    item = item,
-                    onToggle = {
-                        val i = items.indexOfFirst { it.id == item.id }
-                        if (i >= 0) {
-                            items[i] = items[i].copy(checked = !items[i].checked)
-                            onChanged()
-                        }
-                    },
-                    onTextChange = { text ->
-                        val i = items.indexOfFirst { it.id == item.id }
-                        if (i >= 0) {
-                            items[i] = items[i].copy(text = text)
-                            onChanged()
-                        }
-                    },
-                    onDelete = {
-                        items.removeAll { it.id == item.id }
-                        if (items.isEmpty()) {
-                            items.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
-                        }
-                        onChanged()
-                    },
-                )
-            }
-        }
-
         Spacer(Modifier.height(6.dp))
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
-                .clickable(enabled = !readOnly) {
-                    items.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
-                    onChanged()
-                }
+                .clickable(enabled = !readOnly, onClick = onClick)
                 .padding(vertical = 8.dp, horizontal = 4.dp),
         ) {
             Icon(
@@ -2646,6 +2879,8 @@ private fun ScribbleBlockView(
                     },
                 ),
         ) {
+            // Committed strokes redraw only when a stroke is finished (not on every pointer move),
+            // so a densely-drawn scribble block keeps drawing smoothly.
             Canvas(modifier = Modifier.fillMaxSize()) {
                 fun drawStroke(points: List<Offset>) {
                     when {
@@ -2664,7 +2899,26 @@ private fun ScribbleBlockView(
                     }
                 }
                 block.strokes.forEach { drawStroke(it) }
-                if (livePoints.isNotEmpty()) drawStroke(livePoints.toList())
+            }
+            // The in-progress stroke lives on its own overlay - each new point only repaints this one.
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                if (livePoints.isNotEmpty()) {
+                    val points = livePoints.toList()
+                    when {
+                        points.size == 1 -> drawCircle(strokeColor, radius = 1.6.dp.toPx(), center = points[0])
+                        points.size > 1 -> {
+                            val path = Path().apply {
+                                moveTo(points[0].x, points[0].y)
+                                for (i in 1 until points.size) lineTo(points[i].x, points[i].y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = strokeColor,
+                                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                            )
+                        }
+                    }
+                }
             }
             if (block.strokes.isEmpty() && livePoints.isEmpty()) {
                 Text(

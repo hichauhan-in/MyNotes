@@ -160,6 +160,9 @@ fun OnboardingScreen(onFinish: () -> Unit) {
 @Composable
 private fun OnboardingPageContent(page: OnboardingPage) {
     val neu = LocalNeuColors.current
+    // The icon sits at a fixed share of the page height, and the title/subtitle each live in a
+    // FIXED-height slot. That means every element has the exact same position on all three pages,
+    // so swiping never makes the icon jump or the text reflow into place - only the copy differs.
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -167,9 +170,6 @@ private fun OnboardingPageContent(page: OnboardingPage) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Top,
     ) {
-        // A fixed top offset (a share of the page height) keeps the icon and title at the SAME
-        // vertical position on every page, so swiping between pages never makes them jump even
-        // when one page's body text is longer than another's.
         Spacer(Modifier.fillMaxHeight(0.16f))
         Box(
             modifier = Modifier
@@ -206,19 +206,39 @@ private fun OnboardingPageContent(page: OnboardingPage) {
             }
         }
         Spacer(Modifier.height(40.dp))
-        Text(
-            text = page.title,
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.Center,
-        )
+        // Reserve room for up to two title lines; bottom-align so the gap to the subtitle is
+        // identical whether the title is one line or two.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(78.dp),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Text(
+                text = page.title,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+        }
         Spacer(Modifier.height(14.dp))
-        Text(
-            text = page.subtitle,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+        // Reserve room for the longest subtitle (up to four lines); top-align so it always starts
+        // at the same position no matter how long the copy is.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(112.dp),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Text(
+                text = page.subtitle,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 4,
+            )
+        }
     }
 }

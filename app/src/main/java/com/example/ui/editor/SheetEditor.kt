@@ -17,11 +17,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Remove
@@ -38,11 +39,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
@@ -137,7 +145,13 @@ internal fun SheetEditor(
     val neu = LocalNeuColors.current
     var model by remember { mutableStateOf(parseSheet(content)) }
     val current by rememberUpdatedState(model)
-    LaunchedEffect(seedKey) { model = parseSheet(content) }
+    // Which cell (row to col) is currently being edited. Only that one cell is a real text field;
+    // every other cell is a cheap Text, so even a 100x100 sheet stays light.
+    var activeCell by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(seedKey) {
+        model = parseSheet(content)
+        activeCell = null
+    }
 
     fun update(newModel: SheetModel) {
         model = newModel
@@ -194,19 +208,19 @@ internal fun SheetEditor(
         }
         Spacer(Modifier.height(10.dp))
         val hScroll = rememberScrollState()
-        val vScroll = rememberScrollState()
-        Box(
+        // LazyColumn virtualises the rows: only the handful actually on screen are composed, so the
+        // sheet can be arbitrarily tall without ever composing thousands of cells at once. Every row
+        // shares one horizontal scroll state so the columns stay aligned as you scroll sideways.
+        LazyColumn(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
                 .neumorphicRaised(14.dp, neu, elevation = 4.dp)
                 .clip(RoundedCornerShape(14.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .horizontalScroll(hScroll)
-                .verticalScroll(vScroll),
+                .background(MaterialTheme.colorScheme.surface),
         ) {
-            Column {
-                Row {
+            item(key = "sheet-header") {
+                Row(Modifier.horizontalScroll(hScroll)) {
                     Box(
                         modifier = Modifier
                             .width(40.dp)
@@ -222,21 +236,26 @@ internal fun SheetEditor(
                         )
                     }
                 }
-                model.cells.forEachIndexed { r, row ->
-                    Row {
-                        SheetRowHeader(
-                            number = r + 1,
-                            height = model.rowHeights.getOrElse(r) { DEFAULT_ROW_H },
-                            onResize = { nh -> update(current.setRowHeight(r, nh)) },
+            }
+            items(count = model.cells.size, key = { it }) { r ->
+                val row = model.cells[r]
+                val rowH = model.rowHeights.getOrElse(r) { DEFAULT_ROW_H }
+                Row(Modifier.horizontalScroll(hScroll)) {
+                    SheetRowHeader(
+                        number = r + 1,
+                        height = rowH,
+                        onResize = { nh -> update(current.setRowHeight(r, nh)) },
+                    )
+                    row.forEachIndexed { c, cell ->
+                        SheetCell(
+                            value = cell,
+                            width = model.columnWidths.getOrElse(c) { DEFAULT_COL_W },
+                            height = rowH,
+                            active = activeCell == (r to c),
+                            onActivate = { activeCell = r to c },
+                            onDeactivate = { if (activeCell == (r to c)) activeCell = null },
+                            onChange = { v -> update(current.setCell(r, c, v)) },
                         )
-                        row.forEachIndexed { c, cell ->
-                            SheetCell(
-                                value = cell,
-                                width = model.columnWidths.getOrElse(c) { DEFAULT_COL_W },
-                                height = model.rowHeights.getOrElse(r) { DEFAULT_ROW_H },
-                                onChange = { v -> update(current.setCell(r, c, v)) },
-                            )
-                        }
                     }
                 }
             }
@@ -360,22 +379,50 @@ private fun SheetRowHeader(number: Int, height: Int, onResize: (Int) -> Unit) {
 }
 
 @Composable
-private fun SheetCell(value: String, width: Int, height: Int, onChange: (String) -> Unit) {
+private fun SheetCell(
+    value: String,
+    width: Int,
+    height: Int,
+    active: Boolean,
+    onActivate: () -> Unit,
+    onDeactivate: () -> Unit,
+    onChange: (String) -> Unit,
+) {
+    val readOnly = LocalReadOnly.current
     Box(
         modifier = Modifier
             .width(width.dp)
             .height(height.dp)
             .border(0.5.dp, MaterialTheme.colorScheme.outlineVariant)
+            .then(if (!readOnly && !active) Modifier.clickable { onActivate() } else Modifier)
+            .clipToBounds()
             .padding(horizontal = 6.dp, vertical = 4.dp),
     ) {
-        BasicTextField(
-            value = value,
-            onValueChange = onChange,
-            textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
-            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-            readOnly = LocalReadOnly.current,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (active && !readOnly) {
+            // Real editing cell: a single focused text field. Tapping elsewhere (or scrolling it
+            // off-screen) drops focus and turns it back into a plain Text.
+            val focusRequester = remember { FocusRequester() }
+            var tfv by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+            BasicTextField(
+                value = tfv,
+                onValueChange = { tfv = it; onChange(it.text) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(focusRequester)
+                    .onFocusChanged { if (!it.isFocused) onDeactivate() },
+            )
+            LaunchedEffect(Unit) { focusRequester.requestFocus() }
+        } else {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

@@ -97,6 +97,7 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Shop
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -125,6 +126,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -132,7 +134,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import coil.compose.AsyncImage
-import com.example.data.attachments.AttachmentStore
+import com.example.data.attachments.EncAttachment
 import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
@@ -240,24 +242,45 @@ fun HomeScreen(
         val folders = allFolders
         val notes = allNotesForExport
         val folder = defaultExportFolder
-        if (folder != null) {
-            scope.launch {
-                val ok = withContext(Dispatchers.IO) {
-                    val target = ExportIO.createInTree(context, folder, fileName, "application/zip")
-                    target != null && ExportIO.writeStream(context, target) { out ->
-                        Exporter.writeBookZip(context, book.id, folders, notes, format, out)
+        when {
+            // 1) A folder the user explicitly picked in Settings wins.
+            folder != null -> {
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) {
+                        val target = ExportIO.createInTree(context, folder, fileName, "application/zip")
+                        target != null && ExportIO.writeStream(context, target) { out ->
+                            Exporter.writeBookZip(context, book.id, folders, notes, format, out)
+                        }
+                    }
+                    if (ok) {
+                        android.widget.Toast.makeText(context, "Book exported to your folder", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        pendingBookExport = book.id to format
+                        runCatching { exportBookLauncher.launch(fileName) }
                     }
                 }
-                if (ok) {
-                    android.widget.Toast.makeText(context, "Book exported to your folder", android.widget.Toast.LENGTH_SHORT).show()
-                } else {
-                    pendingBookExport = book.id to format
-                    runCatching { exportBookLauncher.launch(fileName) }
+            }
+            // 2) Default: drop it straight into Downloads/MyNotes (no permission on Android 10+).
+            ExportIO.supportsDownloadsExport -> {
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) {
+                        ExportIO.writeToDownloads(context, fileName, "application/zip") { out ->
+                            Exporter.writeBookZip(context, book.id, folders, notes, format, out)
+                        } != null
+                    }
+                    if (ok) {
+                        android.widget.Toast.makeText(context, "Book saved to Downloads/MyNotes", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        pendingBookExport = book.id to format
+                        runCatching { exportBookLauncher.launch(fileName) }
+                    }
                 }
             }
-        } else {
-            pendingBookExport = book.id to format
-            runCatching { exportBookLauncher.launch(fileName) }
+            // 3) Older devices without scoped storage: ask where to save.
+            else -> {
+                pendingBookExport = book.id to format
+                runCatching { exportBookLauncher.launch(fileName) }
+            }
         }
     }
 
@@ -466,6 +489,21 @@ fun HomeScreen(
         }
         }
 
+        // A gentle loader on first open, while the encrypted library is still being read/decrypted
+        // in the background. It disappears the moment the notes are ready, so it never blocks.
+        if (state.loading) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center,
+            ) {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(38.dp),
+                )
+            }
+        }
+
         // Dim scrim behind the expanded FAB menu. On an empty canvas there are no cards to give the
         // menu items contrast, so darken the backdrop more; with notes on screen the lighter scrim
         // already reads well and a heavier one would needlessly hide them.
@@ -604,14 +642,8 @@ fun HomeScreen(
     if (showTemplateCreator) {
         TemplateManagerSheet(
             templates = customTemplates,
-            onNew = {
-                showTemplateCreator = false
-                onEditTemplate("new")
-            },
-            onEdit = { id ->
-                showTemplateCreator = false
-                onEditTemplate(id)
-            },
+            onNew = { onEditTemplate("new") },
+            onEdit = { id -> onEditTemplate(id) },
             onDelete = { viewModel.deleteCustomTemplate(it) },
             onDismiss = { showTemplateCreator = false },
         )
@@ -1295,7 +1327,7 @@ private fun NoteCard(
             }
             if (thumbnail != null) {
                 AsyncImage(
-                    model = AttachmentStore.fileFor(context, thumbnail),
+                    model = EncAttachment(thumbnail),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
@@ -1540,6 +1572,7 @@ private fun FabAction(
     icon: ImageVector,
     iconStart: Boolean = false,
     bordered: Boolean = false,
+    iconSlotSize: Dp = 48.dp,
     onClick: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
@@ -1565,34 +1598,41 @@ private fun FabAction(
         )
     }
     val iconTile: @Composable () -> Unit = {
+        // The 48dp tile is centered inside a slot the width of the parent FAB button, so a spawned
+        // action's icon lines up dead-centre under the main button instead of sitting to one side.
         Box(
             modifier = Modifier
-                // Keep the tile above the label chip so its edge treatment is never clipped.
                 .zIndex(1f)
-                .size(48.dp)
-                .then(
-                    if (bordered) {
-                        // A crisp brand-gradient ring instead of a soft glow: nothing extends beyond
-                        // the circle, so it can never be clipped or muddled by the label chip.
-                        Modifier
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(1.5.dp, brandGradientHorizontal(), CircleShape)
-                    } else {
-                        Modifier
-                            .neumorphicRaised(24.dp, neu, elevation = 7.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surface)
-                    },
-                ),
+                .size(iconSlotSize),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = label,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .then(
+                        if (bordered) {
+                            // A crisp brand-gradient ring instead of a soft glow: nothing extends beyond
+                            // the circle, so it can never be clipped or muddled by the label chip.
+                            Modifier
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.5.dp, brandGradientHorizontal(), CircleShape)
+                        } else {
+                            Modifier
+                                .neumorphicRaised(24.dp, neu, elevation = 7.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.surface)
+                        },
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
     }
     Row(
@@ -1639,12 +1679,24 @@ private fun TemplatesFab(
         ) {
             Column(horizontalAlignment = Alignment.Start) {
                 templates.forEach { template ->
-                    FabAction(template.name, templateIcon(template.iconKey), iconStart = true, bordered = true) {
+                    FabAction(
+                        template.name,
+                        templateIcon(template.iconKey),
+                        iconStart = true,
+                        bordered = true,
+                        iconSlotSize = 52.dp,
+                    ) {
                         onTemplate(template.id)
                     }
                     Spacer(Modifier.height(12.dp))
                 }
-                FabAction("Manage templates", Icons.Rounded.Tune, iconStart = true, bordered = true) { onManage() }
+                FabAction(
+                    "Manage templates",
+                    Icons.Rounded.Tune,
+                    iconStart = true,
+                    bordered = true,
+                    iconSlotSize = 52.dp,
+                ) { onManage() }
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -2475,6 +2527,17 @@ private fun TemplateManagerSheet(
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    // Animate the sheet fully down BEFORE running an action, so it glides shut at the same pace it
+    // slid in instead of vanishing the instant you tap a template or the New button.
+    fun dismissThen(action: () -> Unit = {}) {
+        scope.launch { sheetState.hide() }.invokeOnCompletion {
+            if (!sheetState.isVisible) {
+                onDismiss()
+                action()
+            }
+        }
+    }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -2517,7 +2580,7 @@ private fun TemplateManagerSheet(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(14.dp))
-                                    .clickable { onEdit(template.id) }
+                                    .clickable { dismissThen { onEdit(template.id) } }
                                     .padding(vertical = 10.dp, horizontal = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -2566,7 +2629,7 @@ private fun TemplateManagerSheet(
             BrandGradientButton(
                 text = "New template",
                 icon = Icons.Rounded.Add,
-                onClick = onNew,
+                onClick = { dismissThen(onNew) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }

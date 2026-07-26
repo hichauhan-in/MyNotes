@@ -158,11 +158,16 @@
         <strong>Android Keystore</strong> (hardware‑backed on supported devices) and is used to decrypt
         content only in memory, only while the app is open.
       </p>
+      <p>
+        <strong>Image and voice‑note attachments are also encrypted at rest</strong> with the same
+        Keystore key. They are decrypted only in memory, on demand, when you view or play them, and are
+        never kept as readable files on disk.
+      </p>
       <div class="highlight">
         Plaintext of your notes is <strong>never written to disk</strong> and never leaves your device
         unless you explicitly enable encrypted cloud backup (see below), or you deliberately
-        <strong>export a note or book</strong> — in which case the file is written only to the location
-        <em>you</em> choose through Android’s own “Save to…” picker (or a default export folder you set).
+        <strong>export a note or book</strong> — in which case the file is written only to your
+        <strong>Downloads/MyNotes</strong> folder (or a different export folder you choose in Settings).
       </div>
       <p>
         Because the key stays bound to your device and never leaves it, the encrypted note database and

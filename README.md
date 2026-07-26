@@ -14,7 +14,7 @@ never touches storage, and no account or login is ever required.
 
 ## ✨ Features
 
-- **End‑to‑end on‑device encryption** — notes are serialized and encrypted with **AES‑256‑GCM**; the key lives in the **Android Keystore** and is decrypted only in memory.
+- **End‑to‑end on‑device encryption** — notes **and their image/voice attachments** are encrypted with **AES‑256‑GCM**; the key lives in the **Android Keystore** and is decrypted only in memory.
 - **Offline‑first** — everything works with no internet connection. No sign‑in required.
 - **Premium, neumorphic UI** — a calm indigo→violet design system built on **Material 3**, with light / dark / system themes and optional **dynamic color**.
 - **Fast home dashboard** — staggered note grid with search and filter chips (All, Recent, Favorites, Pinned, Archived, Trash) plus a morphing “create” FAB.
@@ -25,15 +25,15 @@ never touches storage, and no account or login is ever required.
 - **Sheets** — a full-note spreadsheet with editable cells and **drag-resizable rows and columns** (grab the dotted handle between column letters).
 - **Expenses** — a private, fully customisable budgeting dashboard: log income and build your own sections (rename, add, or remove Expenses / Savings / Investments and any custom section you like, such as Accounts) with a live allocation bar that updates what's still unallocated.
 - **Checklists** — turn a note into an interactive, checkable to‑do list with live progress.
-- **Image attachments** — insert photos from the **gallery** or capture live with the **camera**, placed **inline at your cursor** so text and images can be interleaved freely. Drag a corner to **resize** (smoothly) or **crop** an image. Each note keeps its own private, on‑device copy (removed with the note); captures never leave the app unless you export them.
-- **Voice notes** — record audio straight into a note and play it back inline. Recordings are stored privately on‑device and deleted with the note.
+- **Image attachments** — insert photos from the **gallery** or capture live with the **camera**, placed **inline at your cursor** so text and images can be interleaved freely. Drag a corner to **resize** (smoothly) or **crop** an image. Each note keeps its own private, **encrypted‑at‑rest** on‑device copy (removed with the note); captures never leave the app unless you export them.
+- **Voice notes** — record audio straight into a note and play it back inline. Recordings are stored **encrypted at rest** on‑device and deleted with the note.
 - **Books** — organise notes into nestable folders ("books"). Create a book from the + menu, open it to browse or add notes inside, and move single or multiple notes between books. **Long‑press a book to select several at once** and move or delete them together (its **⋮ menu** still gives per‑book actions). Deleting a book (after a confirmation) moves it and **everything nested inside it to Trash together, keeping its structure**, so you can restore the whole book or delete it for good.
 - **Tags** — label notes and search any tag to pull up every note that carries it. Tagging, pin, favorite and colour sit together in one row right under the title on **every** note type (text, checklist, whiteboard, sheet and expenses).
 - **Reusable templates** — kept on a dedicated **templates button in the bottom-left corner**; “Manage templates” lists them, and **New template** opens a full note editor where the title becomes the template name, you pick an icon, and a **Save as template** button stores your draft. Deleted templates go to **Trash** and can be recovered within the retention window.
 - **App lock** — optional unlock with **fingerprint, face, or device PIN** (biometric / device‑credential).
 - **Read‑only by default** — reopening a note shows it read‑only so you can't change it by accident; tap the **pencil** in the top bar to edit. Every note also has a **⋮ menu** (Share, Export, Move to Trash).
 - **Organization** — pin, favorite, archive, color labels, and a recoverable Trash.
-- **Export** — save any note as **plain text, Markdown, HTML or PDF** (notes with images or voice notes come out as a **ZIP** with their attachments), or export a whole **book as a ZIP** that keeps its folder structure and attachments. Files go to the system "Save to…" picker, or set a **default export folder** in Settings to skip it.
+- **Export** — save any note as **plain text, Markdown, HTML or PDF** (notes with images or voice notes come out as a **ZIP** with their attachments), or export a whole **book as a ZIP** that keeps its folder structure and attachments. Exports go straight to your **Downloads/MyNotes** folder by default (no permission needed on Android 10+); pick a different **default export folder** in Settings, or on older devices you'll get the system "Save to…" picker.
 - **Optional encrypted cloud backup** — off by default; when enabled, only encrypted blobs are uploaded (keys never leave your device).
 
 > Screenshots and the full feature roadmap live in the app itself and in [`plan.txt`](plan.txt).

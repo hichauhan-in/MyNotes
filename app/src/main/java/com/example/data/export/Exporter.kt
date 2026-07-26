@@ -1,10 +1,14 @@
 package com.example.data.export
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.util.Base64
 import com.example.data.attachments.AttachmentStore
 import com.example.domain.model.Checklist
@@ -71,10 +75,10 @@ object Exporter {
             zip.closeEntry()
             note.attachments.forEach { att ->
                 runCatching {
-                    val f = AttachmentStore.fileFor(context, att)
-                    if (f.exists()) {
-                        zip.putNextEntry(ZipEntry("attachments/${f.name}"))
-                        zip.write(f.readBytes())
+                    val bytes = AttachmentStore.readDecrypted(context, att)
+                    if (bytes != null) {
+                        zip.putNextEntry(ZipEntry("attachments/${AttachmentStore.fileFor(context, att).name}"))
+                        zip.write(bytes)
                         zip.closeEntry()
                     }
                 }
@@ -115,8 +119,8 @@ object Exporter {
                     put("$dirPath$name.${format.ext}", noteBytes(note, format))
                     note.attachments.forEach { att ->
                         runCatching {
-                            val f = AttachmentStore.fileFor(context, att)
-                            if (f.exists()) put("${dirPath}attachments/${f.name}", f.readBytes())
+                            val bytes = AttachmentStore.readDecrypted(context, att)
+                            if (bytes != null) put("${dirPath}attachments/${AttachmentStore.fileFor(context, att).name}", bytes)
                         }
                     }
                 }
@@ -547,4 +551,53 @@ object ExportIO {
         val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
         DocumentsContract.createDocument(context.contentResolver, parent, mime, displayName)
     }.getOrNull()
+
+    /** The public folder new exports land in by default (visible in the Files/Downloads app). */
+    const val DOWNLOADS_SUBFOLDER = "MyNotes"
+
+    /** True when we can silently write to the public Downloads folder without any permission. */
+    val supportsDownloadsExport: Boolean
+        get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+
+    /**
+     * Writes [bytes] into Downloads/[DOWNLOADS_SUBFOLDER] via MediaStore. Needs no permission on
+     * Android 10+ (scoped storage); duplicate names are auto-numbered by the system. Returns the
+     * new item's Uri, or null on older versions / failure so the caller can fall back to a picker.
+     */
+    fun writeToDownloads(context: Context, displayName: String, mime: String, bytes: ByteArray): Uri? =
+        writeToDownloads(context, displayName, mime) { it.write(bytes) }
+
+    /** Streaming variant of [writeToDownloads]. */
+    fun writeToDownloads(
+        context: Context,
+        displayName: String,
+        mime: String,
+        block: (OutputStream) -> Unit,
+    ): Uri? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val resolver = context.contentResolver
+        val relativePath = Environment.DIRECTORY_DOWNLOADS + "/" + DOWNLOADS_SUBFOLDER
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+            put(MediaStore.Downloads.MIME_TYPE, mime)
+            put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val uri = runCatching { resolver.insert(collection, values) }.getOrNull() ?: return null
+        val ok = runCatching {
+            resolver.openOutputStream(uri)?.use { block(it) } ?: return@runCatching false
+            true
+        }.getOrDefault(false)
+        if (!ok) {
+            runCatching { resolver.delete(uri, null, null) }
+            return null
+        }
+        runCatching {
+            values.clear()
+            values.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        }
+        return uri
+    }
 }

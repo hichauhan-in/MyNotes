@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.domain.model.CustomTemplate
+import com.example.data.security.EncryptionManager
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -163,9 +164,9 @@ class SettingsRepository(context: Context) {
             val o = arr.getJSONObject(i)
             CustomTemplate(
                 id = o.optString("id"),
-                name = o.optString("name"),
+                name = decryptField(o.optString("name")),
                 iconKey = o.optString("icon", "note"),
-                content = o.optString("content"),
+                content = decryptField(o.optString("content")),
                 trashedAt = if (o.has("trashedAt") && !o.isNull("trashedAt")) o.optLong("trashedAt") else null,
             )
         }
@@ -176,14 +177,24 @@ class SettingsRepository(context: Context) {
         items.forEach {
             val o = JSONObject()
                 .put("id", it.id)
-                .put("name", it.name)
+                // A template's name and body are user content, so they're encrypted at rest just
+                // like a note. The icon/id/trashed flag are harmless metadata and stay plaintext.
+                .put("name", EncryptionManager.encrypt(it.name))
                 .put("icon", it.iconKey)
-                .put("content", it.content)
+                .put("content", EncryptionManager.encrypt(it.content))
             if (it.trashedAt != null) o.put("trashedAt", it.trashedAt)
             arr.put(o)
         }
         return arr.toString()
     }
+
+    /**
+     * Decrypts a stored template field, transparently falling back to treating it as legacy
+     * plaintext when it isn't encrypted yet - so templates saved before encryption keep working and
+     * are re-encrypted the next time any template is written.
+     */
+    private fun decryptField(stored: String): String =
+        if (stored.isEmpty()) "" else EncryptionManager.decryptOrNull(stored) ?: stored
 
     private suspend fun edit(block: (androidx.datastore.preferences.core.MutablePreferences) -> Unit) {
         dataStore.edit(block)

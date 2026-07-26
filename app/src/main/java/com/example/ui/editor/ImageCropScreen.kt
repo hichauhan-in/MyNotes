@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,12 +54,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.example.data.attachments.AttachmentStore
+import com.example.data.attachments.EncAttachment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -70,13 +70,20 @@ private enum class Corner { TL, TR, BL, BR }
  */
 @Composable
 internal fun ImageCropDialog(
-    file: File,
+    name: String,
     onCropped: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val imageSize = remember(file.path) { orientedImageSize(file) }
+    var bytes by remember(name) { mutableStateOf<ByteArray?>(null) }
+    var loadFailed by remember(name) { mutableStateOf(false) }
+    LaunchedEffect(name) {
+        val decoded = withContext(Dispatchers.IO) { AttachmentStore.readDecrypted(context, name) }
+        bytes = decoded
+        loadFailed = decoded == null
+    }
+    val imageSize = remember(bytes) { bytes?.let { orientedImageSize(it) } }
     var working by remember { mutableStateOf(false) }
 
     Dialog(
@@ -88,7 +95,18 @@ internal fun ImageCropDialog(
                 .fillMaxSize()
                 .background(Color(0xFF0B0B0F)),
         ) {
-            if (imageSize == null) {
+            val data = bytes
+            if (data == null && !loadFailed) {
+                // Still decrypting - brief.
+                CircularProgressIndicator(
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                CropIconButton(Icons.Rounded.Close, "Close", Modifier.align(Alignment.TopStart).padding(12.dp), onDismiss)
+                return@Box
+            }
+            if (data == null || imageSize == null) {
                 Text(
                     text = "Couldn't open this image.",
                     color = Color.White,
@@ -124,7 +142,7 @@ internal fun ImageCropDialog(
                         .size(with(density) { dispW.toDp() }, with(density) { dispH.toDp() }),
                 ) {
                     AsyncImage(
-                        model = ImageRequest.Builder(context).data(file).build(),
+                        model = EncAttachment(name),
                         contentDescription = "Image to crop",
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -216,7 +234,7 @@ internal fun ImageCropDialog(
                                 val request = crop
                                 scope.launch {
                                     val name = withContext(Dispatchers.IO) {
-                                        cropToFile(context, file, request, bounds)
+                                        cropToFile(context, data, request, bounds)
                                     }
                                     working = false
                                     if (name != null) onCropped(name) else onDismiss()
@@ -336,9 +354,9 @@ private fun resizeRect(r: Rect, corner: Corner, dx: Float, dy: Float, bounds: Re
     return Rect(left, top, right, bottom)
 }
 
-/** Crops [file] to the region described by [crop] (in the same coordinate space as [bounds]). */
-private fun cropToFile(context: android.content.Context, file: File, crop: Rect, bounds: Rect): String? {
-    val bmp = decodeOrientedBitmap(file, 4096) ?: return null
+/** Crops [data] to the region described by [crop] (in the same coordinate space as [bounds]). */
+private fun cropToFile(context: android.content.Context, data: ByteArray, crop: Rect, bounds: Rect): String? {
+    val bmp = decodeOrientedBitmap(data, 4096) ?: return null
     return try {
         val fl = ((crop.left - bounds.left) / bounds.width).coerceIn(0f, 1f)
         val ft = ((crop.top - bounds.top) / bounds.height).coerceIn(0f, 1f)
@@ -358,26 +376,26 @@ private fun cropToFile(context: android.content.Context, file: File, crop: Rect,
 }
 
 /** Image size in display (EXIF-upright) orientation, matching how Coil renders it. */
-private fun orientedImageSize(file: File): Pair<Int, Int>? {
+private fun orientedImageSize(data: ByteArray): Pair<Int, Int>? {
     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.absolutePath, opts)
+    BitmapFactory.decodeByteArray(data, 0, data.size, opts)
     if (opts.outWidth <= 0 || opts.outHeight <= 0) return null
-    val rotation = exifRotation(file)
+    val rotation = exifRotation(data)
     return if (rotation == 90 || rotation == 270) opts.outHeight to opts.outWidth
     else opts.outWidth to opts.outHeight
 }
 
-private fun decodeOrientedBitmap(file: File, maxDim: Int): Bitmap? = runCatching {
+private fun decodeOrientedBitmap(data: ByteArray, maxDim: Int): Bitmap? = runCatching {
     val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.absolutePath, boundsOpts)
+    BitmapFactory.decodeByteArray(data, 0, data.size, boundsOpts)
     val w = boundsOpts.outWidth
     val h = boundsOpts.outHeight
     if (w <= 0 || h <= 0) return null
     var sample = 1
     while (w / sample > maxDim || h / sample > maxDim) sample *= 2
     val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-    val bmp = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return null
-    val rotation = exifRotation(file)
+    val bmp = BitmapFactory.decodeByteArray(data, 0, data.size, opts) ?: return null
+    val rotation = exifRotation(data)
     if (rotation == 0) {
         bmp
     } else {
@@ -388,8 +406,8 @@ private fun decodeOrientedBitmap(file: File, maxDim: Int): Bitmap? = runCatching
     }
 }.getOrNull()
 
-private fun exifRotation(file: File): Int = runCatching {
-    val exif = ExifInterface(file.absolutePath)
+private fun exifRotation(data: ByteArray): Int = runCatching {
+    val exif = ExifInterface(java.io.ByteArrayInputStream(data))
     when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
         ExifInterface.ORIENTATION_ROTATE_90 -> 90
         ExifInterface.ORIENTATION_ROTATE_180 -> 180
