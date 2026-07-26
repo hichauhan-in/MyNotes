@@ -44,29 +44,29 @@ private object Routes {
 @Composable
 fun MyNotesNavigation() {
     val navController = rememberNavController()
-    val dur = 220
-    val outDur = 170
+    val dur = 300
 
     NavHost(
         navController = navController,
         startDestination = Routes.HOME,
-        // A directional "shared axis" slide + fade: snappier and less heavy-feeling than a scale,
-        // so opening a screen (e.g. Expenses) reads as immediate rather than sluggish.
+        // A gentle cross-fade with a hint of directional slide. Enter and exit share one duration so
+        // the outgoing and incoming screens dissolve into each other smoothly, instead of the new
+        // screen snapping into place before the old one has faded.
         enterTransition = {
             fadeIn(tween(dur, easing = FastOutSlowInEasing)) +
-                slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it / 6 }
+                slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it / 12 }
         },
         exitTransition = {
-            fadeOut(tween(outDur, easing = FastOutSlowInEasing)) +
-                slideOutHorizontally(tween(outDur, easing = FastOutSlowInEasing)) { -it / 14 }
+            fadeOut(tween(dur, easing = FastOutSlowInEasing)) +
+                slideOutHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 24 }
         },
         popEnterTransition = {
             fadeIn(tween(dur, easing = FastOutSlowInEasing)) +
-                slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 14 }
+                slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 24 }
         },
         popExitTransition = {
-            fadeOut(tween(outDur, easing = FastOutSlowInEasing)) +
-                slideOutHorizontally(tween(outDur, easing = FastOutSlowInEasing)) { it / 6 }
+            fadeOut(tween(dur, easing = FastOutSlowInEasing)) +
+                slideOutHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it / 12 }
         },
     ) {
         composable(Routes.HOME) {

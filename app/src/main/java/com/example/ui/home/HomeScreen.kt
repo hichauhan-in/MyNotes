@@ -353,7 +353,10 @@ fun HomeScreen(
         }
         }
 
-        // Dim scrim behind the expanded FAB menu.
+        // Dim scrim behind the expanded FAB menu. On an empty canvas there are no cards to give the
+        // menu items contrast, so darken the backdrop more; with notes on screen the lighter scrim
+        // already reads well and a heavier one would needlessly hide them.
+        val fabScrimAlpha = if (state.isEmpty) 0.66f else 0.32f
         AnimatedVisibility(
             visible = (fabExpanded || templatesExpanded) && !selectionMode,
             enter = fadeIn(),
@@ -362,7 +365,7 @@ fun HomeScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.32f))
+                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = fabScrimAlpha))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
@@ -1245,6 +1248,7 @@ private fun FabAction(
     label: String,
     icon: ImageVector,
     iconStart: Boolean = false,
+    bordered: Boolean = false,
     onClick: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
@@ -1259,19 +1263,37 @@ private fun FabAction(
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.surface)
+                .then(
+                    if (bordered) Modifier.border(
+                        1.dp,
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.28f),
+                        RoundedCornerShape(10.dp),
+                    ) else Modifier,
+                )
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         )
     }
     val iconTile: @Composable () -> Unit = {
         Box(
             modifier = Modifier
-                // Draw the tile (and its soft neumorphic glow) above the label chip so the chip's
-                // opaque rectangle never clips the glow, regardless of which side the icon is on.
+                // Keep the tile above the label chip so its edge treatment is never clipped.
                 .zIndex(1f)
                 .size(48.dp)
-                .neumorphicRaised(24.dp, neu, elevation = 7.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.surface),
+                .then(
+                    if (bordered) {
+                        // A crisp brand-gradient ring instead of a soft glow: nothing extends beyond
+                        // the circle, so it can never be clipped or muddled by the label chip.
+                        Modifier
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.5.dp, brandGradientHorizontal(), CircleShape)
+                    } else {
+                        Modifier
+                            .neumorphicRaised(24.dp, neu, elevation = 7.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                    },
+                ),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -1315,7 +1337,6 @@ private fun TemplatesFab(
     onManage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val neu = LocalNeuColors.current
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.Start,
@@ -1327,12 +1348,12 @@ private fun TemplatesFab(
         ) {
             Column(horizontalAlignment = Alignment.Start) {
                 templates.forEach { template ->
-                    FabAction(template.name, templateIcon(template.iconKey), iconStart = true) {
+                    FabAction(template.name, templateIcon(template.iconKey), iconStart = true, bordered = true) {
                         onTemplate(template.id)
                     }
                     Spacer(Modifier.height(12.dp))
                 }
-                FabAction("Manage templates", Icons.Rounded.Tune, iconStart = true) { onManage() }
+                FabAction("Manage templates", Icons.Rounded.Tune, iconStart = true, bordered = true) { onManage() }
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -1340,9 +1361,9 @@ private fun TemplatesFab(
         Box(
             modifier = Modifier
                 .size(52.dp)
-                .neumorphicRaised(26.dp, neu, elevation = 8.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface)
+                .border(2.dp, brandGradientHorizontal(), CircleShape)
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
