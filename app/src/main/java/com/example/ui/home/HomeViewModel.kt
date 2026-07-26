@@ -144,8 +144,13 @@ class HomeViewModel : ViewModel() {
         filter: NoteFilter,
         currentFolderId: String?,
     ): HomeUiState {
-        // Only the "All" view browses books; the other filters are global smart-lists.
-        // While searching, "All" also spans every book so a tag search finds them all.
+        val trashedFolderIds = folderList.filter { it.isTrashed }.mapTo(HashSet()) { it.id }
+        // A trashed item's "trash parent" is its parent only if that parent is also trashed;
+        // otherwise it sits at the root of the trash (e.g. a single note trashed on its own).
+        fun trashRootOf(parentId: String?): String? = parentId?.takeIf { it in trashedFolderIds }
+
+        // Only "All" and "Trash" browse the book hierarchy; the rest are global smart-lists.
+        // While searching, they also span everything so a tag search finds them all.
         val visible = when (filter) {
             NoteFilter.ALL ->
                 if (query.isBlank()) {
@@ -158,7 +163,9 @@ class HomeViewModel : ViewModel() {
             NoteFilter.FAVORITES -> all.filter { !it.isTrashed && it.isFavorite }
             NoteFilter.PINNED -> all.filter { !it.isTrashed && it.isPinned }
             NoteFilter.ARCHIVED -> all.filter { !it.isTrashed && it.isArchived }
-            NoteFilter.TRASH -> all.filter { it.isTrashed }
+            NoteFilter.TRASH ->
+                if (query.isBlank()) all.filter { it.isTrashed && trashRootOf(it.folderId) == currentFolderId }
+                else all.filter { it.isTrashed }
         }
 
         val searched = if (query.isBlank()) visible else visible.filter { note ->
@@ -171,23 +178,30 @@ class HomeViewModel : ViewModel() {
         val pinned = if (showPinnedSection) searched.filter { it.isPinned } else emptyList()
         val rest = if (showPinnedSection) searched.filter { !it.isPinned } else searched
 
-        val books = if (filter == NoteFilter.ALL && query.isBlank()) {
-            folderList
-                .filter { it.parentId == currentFolderId }
-                .sortedBy { it.name.lowercase() }
-                .map { folder ->
-                    BookItem(
-                        folder = folder,
-                        noteCount = all.count { !it.isTrashed && it.folderId == folder.id },
-                        subBookCount = folderList.count { it.parentId == folder.id },
-                    )
-                }
+        val browsing = (filter == NoteFilter.ALL || filter == NoteFilter.TRASH) && query.isBlank()
+        val books = if (browsing) {
+            val children = if (filter == NoteFilter.ALL) {
+                folderList.filter { !it.isTrashed && it.parentId == currentFolderId }
+            } else {
+                folderList.filter { it.isTrashed && trashRootOf(it.parentId) == currentFolderId }
+            }
+            children.sortedBy { it.name.lowercase() }.map { folder ->
+                val inTrash = filter == NoteFilter.TRASH
+                BookItem(
+                    folder = folder,
+                    noteCount = all.count { it.isTrashed == inTrash && it.folderId == folder.id },
+                    subBookCount = folderList.count { it.isTrashed == inTrash && it.parentId == folder.id },
+                )
+            }
         } else {
             emptyList()
         }
 
-        val breadcrumb = if (filter == NoteFilter.ALL) buildBreadcrumb(currentFolderId, folderList)
-        else emptyList()
+        val breadcrumb = when {
+            !browsing -> emptyList()
+            filter == NoteFilter.TRASH -> buildBreadcrumb(currentFolderId, folderList, trashScoped = true)
+            else -> buildBreadcrumb(currentFolderId, folderList, trashScoped = false)
+        }
 
         return HomeUiState(
             filter = filter,
@@ -195,14 +209,18 @@ class HomeViewModel : ViewModel() {
             pinned = pinned,
             notes = rest,
             books = books,
-            currentFolderId = if (filter == NoteFilter.ALL) currentFolderId else null,
+            currentFolderId = if (browsing) currentFolderId else null,
             breadcrumb = breadcrumb,
             totalNotes = all.count { !it.isTrashed && !it.isArchived },
             loading = false,
         )
     }
 
-    private fun buildBreadcrumb(currentId: String?, folderList: List<Folder>): List<Folder> {
+    private fun buildBreadcrumb(
+        currentId: String?,
+        folderList: List<Folder>,
+        trashScoped: Boolean,
+    ): List<Folder> {
         if (currentId == null) return emptyList()
         val byId = folderList.associateBy { it.id }
         val path = ArrayDeque<Folder>()
@@ -210,6 +228,7 @@ class HomeViewModel : ViewModel() {
         val seen = mutableSetOf<String>()
         while (id != null && seen.add(id)) {
             val folder = byId[id] ?: break
+            if (trashScoped && !folder.isTrashed) break
             path.addFirst(folder)
             id = folder.parentId
         }
@@ -220,6 +239,7 @@ class HomeViewModel : ViewModel() {
 
     fun onFilterChanged(value: NoteFilter) {
         _filter.value = value
+        _currentFolderId.value = null
         clearSelection()
     }
 
@@ -229,7 +249,7 @@ class HomeViewModel : ViewModel() {
 
     // ---- Book navigation ----
     fun openBook(folderId: String) {
-        _filter.value = NoteFilter.ALL
+        // Stay in whichever list we're browsing (All or Trash); just descend into the book.
         _currentFolderId.value = folderId
         clearSelection()
     }
@@ -256,14 +276,29 @@ class HomeViewModel : ViewModel() {
     }
 
     fun deleteBook(id: String) {
-        val all = allFolders.value
-        val subtree = subtreeIds(id, all)
-        // If we are currently inside the book being deleted (or a descendant), step out first.
-        if (_currentFolderId.value in subtree) {
-            _currentFolderId.value = all.firstOrNull { it.id == id }?.parentId
-        }
+        stepOutIfInside(id)
         clearSelection()
         viewModelScope.launch { folders.deleteFolderTree(id) }
+    }
+
+    /** Restore a trashed book (and everything nested in it) from Trash. */
+    fun restoreBook(id: String) {
+        stepOutIfInside(id)
+        clearSelection()
+        viewModelScope.launch { folders.restoreFolderTree(id) }
+    }
+
+    /** Permanently delete a trashed book and everything inside it. */
+    fun deleteBookForever(id: String) {
+        stepOutIfInside(id)
+        clearSelection()
+        viewModelScope.launch { folders.deleteFolderTreePermanently(id) }
+    }
+
+    /** If we're currently viewing inside [id] (or a descendant), step back out to the root. */
+    private fun stepOutIfInside(id: String) {
+        val subtree = subtreeIds(id, allFolders.value)
+        if (_currentFolderId.value in subtree) _currentFolderId.value = null
     }
 
     /** How many sub-books and notes a recursive delete of [id] would remove. */
@@ -344,7 +379,14 @@ class HomeViewModel : ViewModel() {
     }
 
     fun restoreFromTrash(note: Note) {
-        viewModelScope.launch { repository.setTrashed(note.id, false) }
+        viewModelScope.launch {
+            // If the note's book was trashed too, restoring just the note would orphan it, so
+            // send it back to the top level instead.
+            if (note.folderId != null && allFolders.value.any { it.id == note.folderId && it.isTrashed }) {
+                folders.moveNoteToFolder(note.id, null)
+            }
+            repository.setTrashed(note.id, false)
+        }
     }
 
     fun deleteForever(note: Note) {
@@ -352,6 +394,10 @@ class HomeViewModel : ViewModel() {
     }
 
     fun emptyTrash() {
-        viewModelScope.launch { repository.emptyTrash() }
+        _currentFolderId.value = null
+        viewModelScope.launch {
+            repository.emptyTrash()
+            folders.emptyTrashedFolders()
+        }
     }
 }

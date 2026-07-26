@@ -1,5 +1,7 @@
 package com.example.data.repository
 
+import android.content.Context
+import com.example.data.attachments.AttachmentStore
 import com.example.data.local.FolderDao
 import com.example.data.local.FolderEntity
 import com.example.data.local.NoteDao
@@ -16,6 +18,7 @@ import kotlinx.coroutines.withContext
 class FolderRepository(
     private val folderDao: FolderDao,
     private val noteDao: NoteDao,
+    private val appContext: Context,
 ) {
     val allFolders: Flow<List<Folder>> = folderDao.getAllFolders().map { list ->
         list.map { it.toFolder() }
@@ -54,19 +57,54 @@ class FolderRepository(
      * at the top level rather than in a book that no longer exists.
      */
     suspend fun deleteFolderTree(id: String) = withContext(Dispatchers.IO) {
+        val subtree = subtreeIds(id)
+        val now = System.currentTimeMillis()
+        // Keep folderId on the notes so Trash can still show the book hierarchy.
+        noteDao.trashNotesInFoldersKeepFolder(subtree, now)
+        folderDao.setFoldersTrashed(subtree, true, now)
+    }
+
+    /** Restore a trashed book and everything nested inside it. */
+    suspend fun restoreFolderTree(id: String) = withContext(Dispatchers.IO) {
+        val subtree = subtreeIds(id)
+        val now = System.currentTimeMillis()
+        folderDao.setFoldersTrashed(subtree, false, now)
+        noteDao.restoreNotesInFolders(subtree, now)
+    }
+
+    /** Permanently delete a trashed book, its sub-books and their notes (and image files). */
+    suspend fun deleteFolderTreePermanently(id: String) = withContext(Dispatchers.IO) {
+        val subtree = subtreeIds(id)
+        noteDao.getAttachmentsInFolders(subtree).forEach { deleteAttachmentFiles(it) }
+        noteDao.deleteNotesInFolders(subtree)
+        folderDao.deleteFoldersByIds(subtree)
+    }
+
+    /** Drop every trashed book row (their notes are cleared separately by emptying the note trash). */
+    suspend fun emptyTrashedFolders() = withContext(Dispatchers.IO) {
+        folderDao.deleteTrashedFolders()
+    }
+
+    /** [rootId] plus every book nested inside it, at any depth (trashed or not). */
+    private suspend fun subtreeIds(rootId: String): List<String> {
         val all = folderDao.getAllFoldersOnce()
         val childrenByParent = all.groupBy { it.parentId }
-        val subtree = mutableListOf<String>()
+        val result = mutableListOf<String>()
         val queue = ArrayDeque<String>()
-        queue.add(id)
+        queue.add(rootId)
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
-            if (subtree.contains(current)) continue
-            subtree.add(current)
+            if (result.contains(current)) continue
+            result.add(current)
             childrenByParent[current]?.forEach { queue.add(it.id) }
         }
-        noteDao.trashNotesInFolders(subtree, System.currentTimeMillis())
-        folderDao.deleteFoldersByIds(subtree)
+        return result
+    }
+
+    private fun deleteAttachmentFiles(attachments: String) {
+        attachments.split(",")
+            .filter { it.isNotBlank() }
+            .forEach { AttachmentStore.delete(appContext, it) }
     }
 
     suspend fun moveNoteToFolder(noteId: String, folderId: String?) = withContext(Dispatchers.IO) {
@@ -84,5 +122,6 @@ class FolderRepository(
         name = name,
         colorArgb = colorArgb,
         parentId = parentId,
+        isTrashed = isTrashed,
     )
 }

@@ -612,7 +612,7 @@ private fun AddSectionDialog(
                     text = if (kind == SectionKind.ALLOCATION) {
                         "Counts against your income and shows in the allocation bar (like expenses or savings)."
                     } else {
-                        "Just tracks balances (like accounts) — it doesn't change what's unallocated."
+                        "Just tracks balances (like accounts) - it doesn't change what's unallocated."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -45,6 +45,23 @@ interface NoteDao {
     )
     suspend fun trashNotesInFolders(folderIds: List<String>, updatedAt: Long)
 
+    /** Trash notes in the given books but KEEP their folderId, so Trash can show the hierarchy. */
+    @Query(
+        "UPDATE notes SET isTrashed = 1, isPinned = 0, updatedAt = :updatedAt " +
+            "WHERE folderId IN (:folderIds)",
+    )
+    suspend fun trashNotesInFoldersKeepFolder(folderIds: List<String>, updatedAt: Long)
+
+    /** Restore notes that were trashed together with their book. */
+    @Query("UPDATE notes SET isTrashed = 0, updatedAt = :updatedAt WHERE folderId IN (:folderIds)")
+    suspend fun restoreNotesInFolders(folderIds: List<String>, updatedAt: Long)
+
+    @Query("SELECT attachments FROM notes WHERE folderId IN (:folderIds)")
+    suspend fun getAttachmentsInFolders(folderIds: List<String>): List<String>
+
+    @Query("DELETE FROM notes WHERE folderId IN (:folderIds)")
+    suspend fun deleteNotesInFolders(folderIds: List<String>)
+
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNoteById(id: String)
 
@@ -83,6 +100,13 @@ interface FolderDao {
 
     @Query("UPDATE folders SET parentId = :newParent WHERE parentId = :oldParent")
     suspend fun reparentChildFolders(oldParent: String, newParent: String?)
+
+    /** Soft-trash (or restore) a set of books together. */
+    @Query("UPDATE folders SET isTrashed = :trashed, trashedAt = :ts WHERE id IN (:ids)")
+    suspend fun setFoldersTrashed(ids: List<String>, trashed: Boolean, ts: Long)
+
+    @Query("DELETE FROM folders WHERE isTrashed = 1")
+    suspend fun deleteTrashedFolders()
 
     @Query("DELETE FROM folders WHERE id = :id")
     suspend fun deleteFolderById(id: String)

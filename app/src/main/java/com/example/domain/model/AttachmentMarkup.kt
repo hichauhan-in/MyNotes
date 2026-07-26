@@ -21,6 +21,8 @@ object AttachmentMarkup {
 
     private val TOKEN = Regex("""!\[([^\]]*)]\(attachment://([^)\s?]+)(?:\?w=(\d+))?\)""")
     private val TABLE = Regex("""\[\[table:[A-Za-z0-9+/=]+]]""")
+    private val CALLOUT = Regex("""\[\[callout:[A-Za-z0-9+/=]+]]""")
+    private val SCRIBBLE = Regex("""\[\[scribble:[A-Za-z0-9+/=]+]]""")
 
     /** The inline token for an image, optionally with a display width percent (10-100). */
     fun imageToken(fileName: String, widthPercent: Int? = null): String =
@@ -46,5 +48,9 @@ object AttachmentMarkup {
     }
 
     /** Content with attachment tokens removed - used for previews, word counts, etc. */
-    fun stripTokens(content: String): String = content.replace(TOKEN, " ").replace(TABLE, " ")
+    fun stripTokens(content: String): String = content
+        .replace(TOKEN, " ")
+        .replace(TABLE, " ")
+        .replace(CALLOUT, " ")
+        .replace(SCRIBBLE, " ")
 }

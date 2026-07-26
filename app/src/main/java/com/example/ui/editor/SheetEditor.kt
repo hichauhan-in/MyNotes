@@ -168,9 +168,9 @@ internal fun SheetEditor(
         )
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            SheetAxisLabel("C")
-            SheetCtrl(Icons.Rounded.Add, "Add column") { update(model.addColumn()) }
-            SheetCtrl(Icons.Rounded.Remove, "Remove column") { update(model.removeColumn()) }
+            SheetAxisLabel("R")
+            SheetCtrl(Icons.Rounded.Add, "Add row") { update(model.addRow()) }
+            SheetCtrl(Icons.Rounded.Remove, "Remove row") { update(model.removeRow()) }
             Box(
                 modifier = Modifier
                     .padding(horizontal = 8.dp)
@@ -178,9 +178,9 @@ internal fun SheetEditor(
                     .width(1.dp)
                     .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.18f)),
             )
-            SheetAxisLabel("R")
-            SheetCtrl(Icons.Rounded.Add, "Add row") { update(model.addRow()) }
-            SheetCtrl(Icons.Rounded.Remove, "Remove row") { update(model.removeRow()) }
+            SheetAxisLabel("C")
+            SheetCtrl(Icons.Rounded.Add, "Add column") { update(model.addColumn()) }
+            SheetCtrl(Icons.Rounded.Remove, "Remove column") { update(model.removeColumn()) }
             Spacer(Modifier.weight(1f))
             Text(
                 text = "${model.cells.size} × ${model.columnWidths.size}",

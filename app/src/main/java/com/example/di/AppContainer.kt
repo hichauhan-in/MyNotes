@@ -40,12 +40,13 @@ object AppContainer {
                     AppDatabase.MIGRATION_2_3,
                     AppDatabase.MIGRATION_3_4,
                     AppDatabase.MIGRATION_4_5,
+                    AppDatabase.MIGRATION_5_6,
                 )
                 // Any other unknown schema jump: wipe & rebuild rather than crash.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
             noteRepository = NoteRepository(database!!.noteDao(), context.applicationContext)
-            folderRepository = FolderRepository(database!!.folderDao(), database!!.noteDao())
+            folderRepository = FolderRepository(database!!.folderDao(), database!!.noteDao(), context.applicationContext)
         }
         if (settingsRepository == null) {
             settingsRepository = SettingsRepository(context.applicationContext)

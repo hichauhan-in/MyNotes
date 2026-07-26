@@ -241,6 +241,12 @@ class EditorViewModel : ViewModel() {
             content = "",
         )
 
+        "scribble" -> EditorUiState(
+            title = "",
+            type = NoteType.SCRIBBLE,
+            content = "",
+        )
+
         "meeting" -> EditorUiState(
             title = "Meeting notes",
             content = buildString {

@@ -76,6 +76,7 @@ import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Gesture
 import androidx.compose.material.icons.rounded.GridOn
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Home
@@ -167,9 +168,11 @@ fun HomeScreen(
     var renameBookFor by remember { mutableStateOf<Folder?>(null) }
     var moveBookFor by remember { mutableStateOf<Folder?>(null) }
     var deleteBookFor by remember { mutableStateOf<Folder?>(null) }
+    var deleteBookForeverFor by remember { mutableStateOf<Folder?>(null) }
 
     val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
     val foldersById = remember(allFolders) { allFolders.associateBy { it.id } }
+    val activeFolders = remember(allFolders) { allFolders.filter { !it.isTrashed } }
 
     val insets = WindowInsets.systemBars.asPaddingValues()
     val visibleIds = remember(state.pinned, state.notes) {
@@ -251,7 +254,7 @@ fun HomeScreen(
             }
 
             val currentBook = state.currentBook
-            if (selectedFilter == NoteFilter.ALL && currentBook != null) {
+            if (currentBook != null) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
                         BookHeader(
@@ -264,10 +267,12 @@ fun HomeScreen(
                 }
             }
 
-            if (selectedFilter == NoteFilter.ALL && state.books.isNotEmpty()) {
+            if (state.books.isNotEmpty()) {
                 item(span = StaggeredGridItemSpan.FullLine) {
                     Column {
-                        SectionHeader(title = "Books")
+                        SectionHeader(
+                            title = if (selectedFilter == NoteFilter.TRASH) "Deleted books" else "Books",
+                        )
                         Spacer(Modifier.height(12.dp))
                     }
                 }
@@ -498,7 +503,7 @@ fun HomeScreen(
     if (showMoveSelection) {
         FolderPickerSheet(
             title = "Move to book",
-            folders = allFolders,
+            folders = activeFolders,
             onSelect = {
                 viewModel.moveSelectedToBook(it)
                 showMoveSelection = false
@@ -510,7 +515,7 @@ fun HomeScreen(
     moveTargetNote?.let { note ->
         FolderPickerSheet(
             title = "Move to book",
-            folders = allFolders,
+            folders = activeFolders,
             onSelect = {
                 viewModel.moveNoteToBook(note.id, it)
                 moveTargetNote = null
@@ -522,7 +527,7 @@ fun HomeScreen(
     moveBookFor?.let { book ->
         FolderPickerSheet(
             title = "Move book into",
-            folders = allFolders,
+            folders = activeFolders,
             excludeSubtreeOf = book.id,
             onSelect = {
                 viewModel.moveBook(book.id, it)
@@ -535,6 +540,7 @@ fun HomeScreen(
     bookActionsFor?.let { book ->
         BookActionsSheet(
             book = book,
+            inTrash = selectedFilter == NoteFilter.TRASH,
             onRename = {
                 bookActionsFor = null
                 renameBookFor = book
@@ -546,6 +552,14 @@ fun HomeScreen(
             onDelete = {
                 bookActionsFor = null
                 deleteBookFor = book
+            },
+            onRestore = {
+                bookActionsFor = null
+                viewModel.restoreBook(book.id)
+            },
+            onDeleteForever = {
+                bookActionsFor = null
+                deleteBookForeverFor = book
             },
             onDismiss = { bookActionsFor = null },
         )
@@ -560,6 +574,17 @@ fun HomeScreen(
                 deleteBookFor = null
             },
             onDismiss = { deleteBookFor = null },
+        )
+    }
+
+    deleteBookForeverFor?.let { book ->
+        DeleteBookForeverDialog(
+            book = book,
+            onConfirm = {
+                viewModel.deleteBookForever(book.id)
+                deleteBookForeverFor = null
+            },
+            onDismiss = { deleteBookForeverFor = null },
         )
     }
 }
@@ -1036,18 +1061,26 @@ private fun NoteCard(
                         }
                     }
 
-                    if (note.isSheet || note.isExpense) {
+                    if (note.isSheet || note.isExpense || note.isScribble) {
                         Spacer(Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
-                                imageVector = if (note.isSheet) Icons.Rounded.GridOn else Icons.Rounded.AccountBalanceWallet,
+                                imageVector = when {
+                                    note.isSheet -> Icons.Rounded.GridOn
+                                    note.isExpense -> Icons.Rounded.AccountBalanceWallet
+                                    else -> Icons.Rounded.Gesture
+                                },
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(14.dp),
                             )
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                text = if (note.isSheet) "Sheet" else "Expenses",
+                                text = when {
+                                    note.isSheet -> "Sheet"
+                                    note.isExpense -> "Expenses"
+                                    else -> "Whiteboard"
+                                },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                             )
@@ -1164,6 +1197,8 @@ private fun ExpandableFab(
                 FabAction("Sheet", Icons.Rounded.GridOn) { onAction("sheet") }
                 Spacer(Modifier.height(12.dp))
                 FabAction("Expenses", Icons.Rounded.AccountBalanceWallet) { onAction("expense") }
+                Spacer(Modifier.height(12.dp))
+                FabAction("Scribble", Icons.Rounded.Gesture) { onAction("scribble") }
                 Spacer(Modifier.height(12.dp))
                 FabAction("Checklist", Icons.Rounded.Checklist) { onAction("checklist") }
                 Spacer(Modifier.height(12.dp))
@@ -1444,7 +1479,19 @@ private fun BuyCoffeeSheet(onDismiss: () -> Unit) {
                 },
             )
             Spacer(Modifier.height(12.dp))
-            CoffeeOption(Icons.Rounded.LocalCafe, "Ko-fi", "Support on ko-fi.com")
+            CoffeeOption(
+                icon = Icons.Rounded.LocalCafe,
+                name = "Ko-fi",
+                subtitle = "Support on ko-fi.com",
+                comingSoon = false,
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/hichauhan")),
+                        )
+                    }
+                },
+            )
             Spacer(Modifier.height(12.dp))
             CoffeeOption(Icons.Rounded.Shop, "Playto", "Support on Playto")
 
@@ -1863,9 +1910,12 @@ private fun FolderPickerRow(
 @Composable
 private fun BookActionsSheet(
     book: Folder,
+    inTrash: Boolean,
     onRename: () -> Unit,
     onMove: () -> Unit,
     onDelete: () -> Unit,
+    onRestore: () -> Unit,
+    onDeleteForever: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -1889,16 +1939,28 @@ private fun BookActionsSheet(
                 overflow = TextOverflow.Ellipsis,
             )
             Spacer(Modifier.height(16.dp))
-            SheetAction(Icons.Rounded.Edit, "Rename") { onRename() }
-            SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
-            SheetAction(Icons.Rounded.Delete, "Delete book", destructive = true) { onDelete() }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Deleting a book also deletes everything nested inside it. Its notes move to Trash so you can still recover them.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp),
-            )
+            if (inTrash) {
+                SheetAction(Icons.Rounded.Restore, "Restore book") { onRestore() }
+                SheetAction(Icons.Rounded.DeleteForever, "Delete forever", destructive = true) { onDeleteForever() }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Restoring brings the book and everything inside it back. Deleting forever can't be undone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            } else {
+                SheetAction(Icons.Rounded.Edit, "Rename") { onRename() }
+                SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
+                SheetAction(Icons.Rounded.Delete, "Delete book", destructive = true) { onDelete() }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Deleting a book moves it and everything nested inside it to Trash, where you can restore it or remove it for good.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+            }
         }
     }
 }
@@ -1912,11 +1974,51 @@ private fun DeleteBookDialog(
 ) {
     val insideText = when {
         summary.subBooks > 0 && summary.notes > 0 ->
-            "${plural(summary.subBooks, "sub-book")} and ${plural(summary.notes, "note")} inside it will also be deleted."
-        summary.subBooks > 0 -> "${plural(summary.subBooks, "sub-book")} inside it will also be deleted."
-        summary.notes > 0 -> "${plural(summary.notes, "note")} inside it will also be deleted."
+            "${plural(summary.subBooks, "sub-book")} and ${plural(summary.notes, "note")} inside it will move too."
+        summary.subBooks > 0 -> "${plural(summary.subBooks, "sub-book")} inside it will move too."
+        summary.notes > 0 -> "${plural(summary.notes, "note")} inside it will move too."
         else -> "This book is empty."
     }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                Icons.Rounded.Delete,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+            )
+        },
+        title = { Text("Delete \"${book.name}\"?") },
+        text = {
+            Text(
+                text = if (summary.hasContent) {
+                    "$insideText Everything moves to Trash together, keeping its structure, so you can restore or permanently delete it from there."
+                } else {
+                    "This book will be moved to Trash."
+                },
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = "Move to Trash",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun DeleteBookForeverDialog(
+    book: Folder,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
@@ -1926,20 +2028,14 @@ private fun DeleteBookDialog(
                 tint = MaterialTheme.colorScheme.error,
             )
         },
-        title = { Text("Delete \"${book.name}\"?") },
+        title = { Text("Delete \"${book.name}\" forever?") },
         text = {
-            Text(
-                text = if (summary.hasContent) {
-                    "$insideText Deleted notes are moved to Trash and can be restored; the books themselves can't be brought back."
-                } else {
-                    "This book will be deleted."
-                },
-            )
+            Text("This book, its sub-books and all their notes will be permanently deleted. This can't be undone.")
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
                 Text(
-                    text = if (summary.hasContent) "Delete everything" else "Delete",
+                    text = "Delete forever",
                     color = MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -2044,14 +2140,18 @@ private fun TemplateManagerSheet(
             }
 
             Spacer(Modifier.height(18.dp))
-            // A fixed-height body so switching tabs never resizes the sheet.
+            // A bounded body that shrinks with the keyboard so the whole form stays reachable.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(460.dp),
+                    .heightIn(min = 240.dp, max = 460.dp),
             ) {
                 if (selectedTab == 0) {
-                    Column(modifier = Modifier.fillMaxSize()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                    ) {
                         TemplateLabel("Name")
                         TemplateTextField(name, { name = it }, "e.g. Daily journal", singleLine = true)
 
@@ -2076,7 +2176,7 @@ private fun TemplateManagerSheet(
                             placeholder = "Type your template…",
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f),
+                                .heightIn(min = 140.dp, max = 240.dp),
                         )
 
                         Spacer(Modifier.height(16.dp))

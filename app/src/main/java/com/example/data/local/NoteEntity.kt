@@ -38,4 +38,6 @@ data class FolderEntity(
     val name: String,
     val colorArgb: Int = 0,
     val parentId: String? = null,
+    val isTrashed: Boolean = false,
+    val trashedAt: Long = 0,
 )

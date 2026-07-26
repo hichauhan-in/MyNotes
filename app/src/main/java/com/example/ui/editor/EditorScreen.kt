@@ -12,10 +12,13 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -63,7 +66,9 @@ import androidx.compose.material.icons.rounded.FormatColorFill
 import androidx.compose.material.icons.rounded.FormatItalic
 import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.FormatQuote
+import androidx.compose.material.icons.rounded.Gesture
 import androidx.compose.material.icons.rounded.HorizontalRule
+import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material.icons.rounded.Palette
@@ -75,6 +80,7 @@ import androidx.compose.material.icons.rounded.Sell
 import androidx.compose.material.icons.rounded.StrikethroughS
 import androidx.compose.material.icons.rounded.TableChart
 import androidx.compose.material.icons.rounded.Title
+import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -100,8 +106,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
@@ -286,6 +297,26 @@ fun EditorScreen(
         }
     }
 
+    fun insertCalloutBlock() = insertBlockAtCursor(CalloutBlock(newBlockId(), "💡", ""))
+
+    fun updateCalloutBlock(blockId: String, newBlock: CalloutBlock) {
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && blocks[idx] is CalloutBlock) {
+            blocks[idx] = newBlock
+            pushBlocks(immediate = false)
+        }
+    }
+
+    fun insertScribbleBlock() = insertBlockAtCursor(ScribbleBlock(newBlockId(), emptyList(), 220))
+
+    fun updateScribbleBlock(blockId: String, newBlock: ScribbleBlock, immediate: Boolean) {
+        val idx = blocks.indexOfFirst { it.id == blockId }
+        if (idx >= 0 && blocks[idx] is ScribbleBlock) {
+            blocks[idx] = newBlock
+            pushBlocks(immediate = immediate)
+        }
+    }
+
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> if (granted) showVoiceRecorder = true else showMicRationale = true }
@@ -386,6 +417,15 @@ fun EditorScreen(
             )
 
             NoteType.EXPENSE -> ExpenseEditor(
+                seedKey = state.id,
+                title = state.title,
+                content = state.content,
+                onTitleChange = viewModel::onTitleChanged,
+                onContentChange = viewModel::onContentChanged,
+                modifier = Modifier.weight(1f),
+            )
+
+            NoteType.SCRIBBLE -> ScribbleEditor(
                 seedKey = state.id,
                 title = state.title,
                 content = state.content,
@@ -498,6 +538,26 @@ fun EditorScreen(
                                 )
                                 Spacer(Modifier.height(12.dp))
                             }
+
+                            is CalloutBlock -> {
+                                CalloutBlockView(
+                                    block = block,
+                                    onChange = { updated -> updateCalloutBlock(block.id, updated) },
+                                    onRemove = { removeBlock(block.id) },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
+
+                            is ScribbleBlock -> {
+                                ScribbleBlockView(
+                                    block = block,
+                                    onChange = { updated, immediate ->
+                                        updateScribbleBlock(block.id, updated, immediate)
+                                    },
+                                    onRemove = { removeBlock(block.id) },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
                         }
                     }
                 }
@@ -509,7 +569,8 @@ fun EditorScreen(
             FormattingToolbar(
                 onImage = { showImagePicker = true },
                 onVoice = { startVoiceNote() },
-                onHeader = { editFocusedBlock { prefixLine(it, "# ") } },
+                onScribble = { insertScribbleBlock() },
+                onHeading = { prefix -> editFocusedBlock { prefixLine(it, prefix) } },
                 onFormat = { token -> editFocusedBlock { wrapSelection(it, token) } },
                 onBullet = { editFocusedBlock { prefixLine(it, "- ") } },
                 onNumbered = { editFocusedBlock { prefixLine(it, "1. ") } },
@@ -517,6 +578,7 @@ fun EditorScreen(
                 onWrap = { open, close -> editFocusedBlock { surround(it, open, close) } },
                 onDivider = { editFocusedBlock { insert(it, "\n\n--------------------\n\n") } },
                 onTable = { showTableDialog = true },
+                onCallout = { insertCalloutBlock() },
             )
         }
         }
@@ -729,6 +791,12 @@ private enum class FormatStyle(val icon: ImageVector, val label: String, val tok
     HIGHLIGHT(Icons.Rounded.FormatColorFill, "Highlight", "=="),
 }
 
+private enum class HeadingStyle(val label: String, val prefix: String, val badge: String) {
+    H1("Large title", "# ", "H1"),
+    H2("Medium title", "## ", "H2"),
+    H3("Small title", "### ", "H3"),
+}
+
 private data class WrapStyle(val glyph: String, val label: String, val open: String, val close: String)
 
 private val wrapStyles = listOf(
@@ -745,7 +813,8 @@ private val wrapStyles = listOf(
 private fun FormattingToolbar(
     onImage: () -> Unit,
     onVoice: () -> Unit,
-    onHeader: () -> Unit,
+    onScribble: () -> Unit,
+    onHeading: (prefix: String) -> Unit,
     onFormat: (token: String) -> Unit,
     onBullet: () -> Unit,
     onNumbered: () -> Unit,
@@ -753,10 +822,12 @@ private fun FormattingToolbar(
     onWrap: (open: String, close: String) -> Unit,
     onDivider: () -> Unit,
     onTable: () -> Unit,
+    onCallout: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
     var listStyle by remember { mutableStateOf(ListStyle.BULLET) }
     var formatStyle by remember { mutableStateOf(FormatStyle.BOLD) }
+    var headingStyle by remember { mutableStateOf(HeadingStyle.H1) }
     var wrapIndex by remember { mutableStateOf(0) }
 
     fun applyList(style: ListStyle) = when (style) {
@@ -781,8 +852,25 @@ private fun FormattingToolbar(
         ToolbarAccentButton(Icons.Rounded.AddPhotoAlternate, "Add image", onImage)
         Spacer(Modifier.width(6.dp))
         ToolbarAccentButton(Icons.Rounded.Mic, "Record voice note", onVoice)
+        Spacer(Modifier.width(6.dp))
+        ToolbarAccentButton(Icons.Rounded.Gesture, "Scribble", onScribble)
         ToolbarDivider()
-        ToolbarButton(Icons.Rounded.Title, "Heading", onHeader)
+        ToolbarMenuButton(
+            description = headingStyle.label,
+            onClick = { onHeading(headingStyle.prefix) },
+            icon = Icons.Rounded.Title,
+        ) { dismiss ->
+            HeadingStyle.entries.forEach { style ->
+                DropdownMenuItem(
+                    text = { Text("${style.badge}   ${style.label}") },
+                    onClick = {
+                        headingStyle = style
+                        dismiss()
+                        onHeading(style.prefix)
+                    },
+                )
+            }
+        }
         ToolbarMenuButton(
             description = formatStyle.label,
             onClick = { onFormat(formatStyle.token) },
@@ -836,6 +924,7 @@ private fun FormattingToolbar(
         }
         ToolbarButton(Icons.Rounded.HorizontalRule, "Divider", onDivider)
         ToolbarButton(Icons.Rounded.TableChart, "Table", onTable)
+        ToolbarButton(Icons.Rounded.Lightbulb, "Callout", onCallout)
     }
 }
 
@@ -1902,6 +1991,217 @@ private fun TableCtrl(icon: ImageVector, description: String, onClick: () -> Uni
     }
 }
 
+/** A highlighted note box (tip / warning / reminder). Tap the badge to cycle its icon. */
+@Composable
+private fun CalloutBlockView(
+    block: CalloutBlock,
+    onChange: (CalloutBlock) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val emojis = remember { listOf("💡", "⚠️", "✅", "📌", "🔥", "❤️", "📝", "❓", "⭐", "🚀") }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f))
+            .padding(12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.6f))
+                .clickable {
+                    val idx = emojis.indexOf(block.emoji).coerceAtLeast(0)
+                    onChange(block.copy(emoji = emojis[(idx + 1) % emojis.size]))
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(block.emoji, fontSize = 18.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        BasicTextField(
+            value = block.text,
+            onValueChange = { onChange(block.copy(text = it)) },
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            decorationBox = { inner ->
+                if (block.text.isEmpty()) {
+                    Text(
+                        text = "Write a callout: tip, warning, reminder…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                }
+                inner()
+            },
+            modifier = Modifier
+                .weight(1f)
+                .padding(top = 4.dp),
+        )
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onRemove),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Rounded.Close,
+                contentDescription = "Remove callout",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+/** A lightweight, resizable freehand drawing area inside a note. */
+@Composable
+private fun ScribbleBlockView(
+    block: ScribbleBlock,
+    onChange: (ScribbleBlock, Boolean) -> Unit,
+    onRemove: () -> Unit,
+) {
+    val density = LocalDensity.current
+    val strokeColor = MaterialTheme.colorScheme.onSurface
+    val current by rememberUpdatedState(block)
+    val livePoints = remember { mutableStateListOf<Offset>() }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.Gesture,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Scribble",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TableCtrl(Icons.Rounded.Undo, "Undo") {
+                if (current.strokes.isNotEmpty()) {
+                    onChange(current.copy(strokes = current.strokes.dropLast(1)), true)
+                }
+            }
+            TableCtrl(Icons.Rounded.Delete, "Clear") {
+                if (current.strokes.isNotEmpty()) onChange(current.copy(strokes = emptyList()), true)
+            }
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onRemove),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "Remove scribble",
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(block.heightDp.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        livePoints.clear()
+                        livePoints.add(down.position)
+                        var active = true
+                        while (active) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null || !change.pressed) {
+                                active = false
+                            } else {
+                                livePoints.add(change.position)
+                                change.consume()
+                            }
+                        }
+                        if (livePoints.isNotEmpty()) {
+                            onChange(current.copy(strokes = current.strokes + listOf(livePoints.toList())), true)
+                        }
+                        livePoints.clear()
+                    }
+                },
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                fun drawStroke(points: List<Offset>) {
+                    when {
+                        points.size == 1 -> drawCircle(strokeColor, radius = 1.6.dp.toPx(), center = points[0])
+                        points.size > 1 -> {
+                            val path = Path().apply {
+                                moveTo(points[0].x, points[0].y)
+                                for (i in 1 until points.size) lineTo(points[i].x, points[i].y)
+                            }
+                            drawPath(
+                                path = path,
+                                color = strokeColor,
+                                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                            )
+                        }
+                    }
+                }
+                block.strokes.forEach { drawStroke(it) }
+                if (livePoints.isNotEmpty()) drawStroke(livePoints.toList())
+            }
+            if (block.strokes.isEmpty() && livePoints.isEmpty()) {
+                Text(
+                    text = "Draw with your finger or a stylus",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(22.dp)
+                .pointerInput(Unit) {
+                    var startH = 0
+                    var acc = 0f
+                    detectDragGestures(
+                        onDragStart = { startH = current.heightDp; acc = 0f },
+                        onDrag = { change, drag ->
+                            change.consume()
+                            acc += drag.y
+                            val delta = with(density) { acc.toDp().value }.toInt()
+                            onChange(current.copy(heightDp = (startH + delta).coerceIn(120, 600)), false)
+                        },
+                        onDragEnd = { onChange(current, true) },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(44.dp)
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)),
+            )
+        }
+    }
+}
+
 @Composable
 private fun TableSizeDialog(
     onCreate: (rows: Int, cols: Int) -> Unit,
@@ -2023,10 +2323,24 @@ private data class TableBlock(
     val cells: List<List<String>>,
 ) : EditorBlock
 
+private data class CalloutBlock(
+    override val id: String,
+    val emoji: String,
+    val text: String,
+) : EditorBlock
+
+private data class ScribbleBlock(
+    override val id: String,
+    val strokes: List<List<Offset>>,
+    val heightDp: Int,
+) : EditorBlock
+
 private fun newBlockId(): String = UUID.randomUUID().toString()
 
 private val CHECKLIST_LINE = Regex("""^- \[( |x|X)] ?(.*)$""")
 private val TABLE_LINE = Regex("""^\[\[table:([A-Za-z0-9+/=]+)]]$""")
+private val CALLOUT_LINE = Regex("""^\[\[callout:([A-Za-z0-9+/=]+)]]$""")
+private val SCRIBBLE_LINE = Regex("""^\[\[scribble:([A-Za-z0-9+/=]+)]]$""")
 
 private fun parseContentToBlocks(content: String): List<EditorBlock> {
     val result = mutableListOf<EditorBlock>()
@@ -2045,6 +2359,8 @@ private fun parseContentToBlocks(content: String): List<EditorBlock> {
     content.split("\n").forEach { line ->
         val ref = AttachmentMarkup.parseLine(line)
         val tableMatch = TABLE_LINE.matchEntire(line.trim())
+        val calloutMatch = CALLOUT_LINE.matchEntire(line.trim())
+        val scribbleMatch = SCRIBBLE_LINE.matchEntire(line.trim())
         val checkMatch = CHECKLIST_LINE.matchEntire(line)
         when {
             ref != null -> {
@@ -2056,6 +2372,16 @@ private fun parseContentToBlocks(content: String): List<EditorBlock> {
                 flushChecklist(); flushText()
                 val table = decodeTable(newBlockId(), tableMatch.groupValues[1])
                 if (table != null) result.add(table) else textLines.add(line)
+            }
+            calloutMatch != null -> {
+                flushChecklist(); flushText()
+                val callout = decodeCallout(newBlockId(), calloutMatch.groupValues[1])
+                if (callout != null) result.add(callout) else textLines.add(line)
+            }
+            scribbleMatch != null -> {
+                flushChecklist(); flushText()
+                val scribble = decodeScribble(newBlockId(), scribbleMatch.groupValues[1])
+                if (scribble != null) result.add(scribble) else textLines.add(line)
             }
             checkMatch != null -> {
                 // Only break the text run when a checklist run actually starts.
@@ -2090,8 +2416,51 @@ private fun serializeBlocks(blocks: List<EditorBlock>): String =
                 "- [${if (item.checked) "x" else " "}] ${item.text}"
             }
             is TableBlock -> encodeTable(block)
+            is CalloutBlock -> encodeCallout(block)
+            is ScribbleBlock -> encodeScribble(block)
         }
     }
+
+private fun encodeCallout(block: CalloutBlock): String {
+    val obj = JSONObject().put("e", block.emoji).put("t", block.text)
+    val bytes = obj.toString().toByteArray(Charsets.UTF_8)
+    return "[[callout:${Base64.encodeToString(bytes, Base64.NO_WRAP)}]]"
+}
+
+private fun decodeCallout(id: String, encoded: String): CalloutBlock? = runCatching {
+    val json = String(Base64.decode(encoded, Base64.NO_WRAP), Charsets.UTF_8)
+    val obj = JSONObject(json)
+    CalloutBlock(id, obj.optString("e", "💡").ifBlank { "💡" }, obj.optString("t"))
+}.getOrNull()
+
+private fun encodeScribble(block: ScribbleBlock): String {
+    val obj = JSONObject()
+    obj.put("h", block.heightDp)
+    val strokesArr = JSONArray()
+    block.strokes.forEach { stroke ->
+        val pts = JSONArray()
+        stroke.forEach { p -> pts.put(JSONArray().put(p.x.toDouble()).put(p.y.toDouble())) }
+        strokesArr.put(pts)
+    }
+    obj.put("s", strokesArr)
+    val bytes = obj.toString().toByteArray(Charsets.UTF_8)
+    return "[[scribble:${Base64.encodeToString(bytes, Base64.NO_WRAP)}]]"
+}
+
+private fun decodeScribble(id: String, encoded: String): ScribbleBlock? = runCatching {
+    val json = String(Base64.decode(encoded, Base64.NO_WRAP), Charsets.UTF_8)
+    val obj = JSONObject(json)
+    val h = obj.optInt("h", 220)
+    val sArr = obj.optJSONArray("s") ?: JSONArray()
+    val strokes = (0 until sArr.length()).map { i ->
+        val ptsArr = sArr.getJSONArray(i)
+        (0 until ptsArr.length()).map { j ->
+            val p = ptsArr.getJSONArray(j)
+            Offset(p.getDouble(0).toFloat(), p.getDouble(1).toFloat())
+        }
+    }
+    ScribbleBlock(id, strokes, h.coerceIn(120, 600))
+}.getOrNull()
 
 private fun encodeTable(block: TableBlock): String {
     val obj = JSONObject()
