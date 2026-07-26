@@ -33,7 +33,7 @@ never touches storage, and no account or login is ever required.
 - **App lock** — optional unlock with **fingerprint, face, or device PIN** (biometric / device‑credential).
 - **Read‑only by default** — reopening a note shows it read‑only so you can't change it by accident; tap the **pencil** in the top bar to edit. Every note also has a **⋮ menu** (Share, Export, Move to Trash).
 - **Organization** — pin, favorite, archive, color labels, and a recoverable Trash.
-- **Export** — save any note as **plain text, Markdown, HTML or PDF** (notes with images or voice notes come out as a **ZIP** with their attachments), or export a whole **book as a ZIP** that keeps its folder structure and attachments. Exports go straight to your **Downloads/MyNotes** folder by default (no permission needed on Android 10+); pick a different **default export folder** in Settings, or on older devices you'll get the system "Save to…" picker.
+- **Export** — save any note as **plain text, Markdown, HTML or PDF** (notes with images or voice notes come out as a **ZIP** with their attachments, and any **drawings/whiteboards are rendered into the file** as images), or export a whole **book as a ZIP** that keeps its folder structure and attachments. Exports go straight to your **Downloads/MyNotes** folder by default (no permission needed on Android 10+); pick a different **default export folder** in Settings, or on older devices you'll get the system "Save to…" picker.
 - **Optional encrypted cloud backup** — off by default; when enabled, only encrypted blobs are uploaded (keys never leave your device).
 
 > Screenshots and the full feature roadmap live in the app itself and in [`plan.txt`](plan.txt).

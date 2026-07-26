@@ -2,7 +2,12 @@ package com.example.data.export
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
@@ -189,7 +194,7 @@ object Exporter {
             .joinToString("\n") { "- [${if (it.checked) "x" else " "}] " + it.text }
         NoteType.SHEET -> tableToMd(sheetCells(note.content))
         NoteType.EXPENSE -> expenseMd(note.content)
-        NoteType.SCRIBBLE -> scribbleToText(note.content)
+        NoteType.SCRIBBLE -> whiteboardMd(note.content)
         else -> textNoteToMd(note.content)
     }
 
@@ -197,7 +202,7 @@ object Exporter {
         NoteType.CHECKLIST -> checklistHtml(note.content)
         NoteType.SHEET -> tableToHtml(sheetCells(note.content))
         NoteType.EXPENSE -> expenseHtml(note.content)
-        NoteType.SCRIBBLE -> "<p>" + esc(scribbleToText(note.content)).replace("\n", "<br>") + "</p>"
+        NoteType.SCRIBBLE -> whiteboardHtml(note.content)
         else -> textNoteToHtml(note.content)
     }
 
@@ -228,6 +233,7 @@ object Exporter {
             val img = IMG.matchEntire(l)
             val tbl = TABLE.matchEntire(l)
             val cal = CALLOUT.matchEntire(l)
+            val scr = SCRIBBLE.matchEntire(l)
             when {
                 img != null -> {
                     val f = img.groupValues[2]
@@ -238,7 +244,7 @@ object Exporter {
                 }
                 tbl != null -> { appendLine(tableToMd(decodeCells(tbl.groupValues[1]))) }
                 cal != null -> { val (e, t) = decodeCallout(cal.groupValues[1]); appendLine("> $e $t".trim()) }
-                SCRIBBLE.matches(l) -> appendLine("_[Sketch]_")
+                scr != null -> appendLine(scribbleBlockPng(scr.groupValues[1])?.let { "![sketch](${dataUri(it)})" } ?: "_[Sketch]_")
                 else -> appendLine(raw)
             }
         }
@@ -262,6 +268,7 @@ object Exporter {
             val img = IMG.matchEntire(l)
             val tbl = TABLE.matchEntire(l)
             val cal = CALLOUT.matchEntire(l)
+            val scr = SCRIBBLE.matchEntire(l)
             when {
                 l.isEmpty() -> flush()
                 img != null -> {
@@ -279,7 +286,12 @@ object Exporter {
                     val (e, t) = decodeCallout(cal.groupValues[1])
                     sb.append("<blockquote>").append(esc(e)).append(" ").append(inlineMd(t)).append("</blockquote>")
                 }
-                SCRIBBLE.matches(l) -> { flush(); sb.append("<p><em>[Sketch]</em></p>") }
+                scr != null -> {
+                    flush()
+                    val png = scribbleBlockPng(scr.groupValues[1])
+                    if (png != null) sb.append("<img src=\"").append(dataUri(png)).append("\" alt=\"sketch\">")
+                    else sb.append("<p><em>[Sketch]</em></p>")
+                }
                 l.startsWith("### ") -> { flush(); sb.append("<h3>").append(inlineMd(l.removePrefix("### "))).append("</h3>") }
                 l.startsWith("## ") -> { flush(); sb.append("<h2>").append(inlineMd(l.removePrefix("## "))).append("</h2>") }
                 l.startsWith("# ") -> { flush(); sb.append("<h2>").append(inlineMd(l.removePrefix("# "))).append("</h2>") }
@@ -456,6 +468,154 @@ object Exporter {
         }
     }
 
+    // ---- Scribble / whiteboard rendering ----------------------------------------
+    // A drawing is stored only as vector points, so on export we rasterise it to a PNG. That PNG is
+    // then embedded inline (HTML/Markdown data URI) or drawn onto the page (PDF), so the actual
+    // sketch shows up in the file - never just a "[Sketch]" placeholder.
+
+    private const val SCRIBBLE_PAD = 28f
+    private const val SCRIBBLE_MAX_DIM = 2200
+    private const val SCRIBBLE_INK = 0xFF1B1B1F.toInt()
+
+    /** A stroke as points ([[x,y],...]) plus an ARGB colour and pixel width. */
+    private class RenderStroke(val points: List<FloatArray>, val color: Int, val width: Float)
+
+    private fun JSONArray.toPoints(): List<FloatArray> =
+        (0 until length()).mapNotNull { k ->
+            optJSONArray(k)?.let { floatArrayOf(it.optDouble(0).toFloat(), it.optDouble(1).toFloat()) }
+        }
+
+    /** Renders an inline scribble block token (its base64 payload) to a PNG, or null if empty. */
+    private fun scribbleBlockPng(b64: String): ByteArray? {
+        val o = decodeJson(b64) ?: return null
+        val s = o.optJSONArray("s") ?: return null
+        val strokes = (0 until s.length()).mapNotNull { i ->
+            s.optJSONArray(i)?.toPoints()?.takeIf { it.isNotEmpty() }?.let { RenderStroke(it, SCRIBBLE_INK, 5f) }
+        }
+        return drawScribblePng(strokes, emptyList())
+    }
+
+    /** Renders a whole whiteboard note (its raw JSON) to a PNG, or null if it has no drawing. */
+    private fun whiteboardPng(content: String): ByteArray? {
+        val o = decodeJsonRaw(content) ?: return null
+        val s = o.optJSONArray("s") ?: JSONArray()
+        val strokes = (0 until s.length()).mapNotNull { i ->
+            when (val el = s.opt(i)) {
+                is JSONObject -> el.optJSONArray("p")?.toPoints()?.takeIf { it.isNotEmpty() }?.let {
+                    val color = el.optInt("c", 0).let { c -> if (c == 0) SCRIBBLE_INK else c }
+                    RenderStroke(it, color, el.optDouble("w", 3.0).toFloat().coerceAtLeast(2f))
+                }
+                is JSONArray -> el.toPoints().takeIf { it.isNotEmpty() }?.let { RenderStroke(it, SCRIBBLE_INK, 4f) }
+                else -> null
+            }
+        }
+        val t = o.optJSONArray("t") ?: JSONArray()
+        val texts = (0 until t.length()).mapNotNull {
+            val to = t.getJSONObject(it)
+            to.optString("t").takeIf { s2 -> s2.isNotBlank() }?.let { txt ->
+                Triple(to.optDouble("x").toFloat(), to.optDouble("y").toFloat(), txt)
+            }
+        }
+        return drawScribblePng(strokes, texts)
+    }
+
+    private fun drawScribblePng(strokes: List<RenderStroke>, texts: List<Triple<Float, Float, String>>): ByteArray? {
+        if (strokes.isEmpty() && texts.isEmpty()) return null
+        var minX = Float.MAX_VALUE; var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE; var maxY = -Float.MAX_VALUE
+        strokes.forEach { st ->
+            st.points.forEach { p ->
+                minX = minOf(minX, p[0] - st.width); minY = minOf(minY, p[1] - st.width)
+                maxX = maxOf(maxX, p[0] + st.width); maxY = maxOf(maxY, p[1] + st.width)
+            }
+        }
+        texts.forEach { (x, y, _) ->
+            minX = minOf(minX, x); minY = minOf(minY, y - 20f)
+            maxX = maxOf(maxX, x + 220f); maxY = maxOf(maxY, y + 24f)
+        }
+        if (minX > maxX || minY > maxY) return null
+        val rawW = (maxX - minX) + SCRIBBLE_PAD * 2
+        val rawH = (maxY - minY) + SCRIBBLE_PAD * 2
+        val scale = minOf(1f, SCRIBBLE_MAX_DIM / maxOf(rawW, rawH, 1f))
+        val w = (rawW * scale).toInt().coerceIn(1, SCRIBBLE_MAX_DIM)
+        val h = (rawH * scale).toInt().coerceIn(1, SCRIBBLE_MAX_DIM)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        return try {
+            val canvas = Canvas(bmp)
+            canvas.drawColor(0xFFFFFFFF.toInt())
+            canvas.translate(SCRIBBLE_PAD * scale, SCRIBBLE_PAD * scale)
+            canvas.scale(scale, scale)
+            canvas.translate(-minX, -minY)
+            val paint = Paint().apply {
+                isAntiAlias = true
+                style = Paint.Style.STROKE
+                strokeCap = Paint.Cap.ROUND
+                strokeJoin = Paint.Join.ROUND
+            }
+            strokes.forEach { st ->
+                paint.color = st.color
+                paint.strokeWidth = st.width
+                if (st.points.size == 1) {
+                    val dot = Paint(paint).apply { style = Paint.Style.FILL }
+                    canvas.drawCircle(st.points[0][0], st.points[0][1], st.width / 2f, dot)
+                } else {
+                    val path = Path().apply {
+                        moveTo(st.points[0][0], st.points[0][1])
+                        for (i in 1 until st.points.size) lineTo(st.points[i][0], st.points[i][1])
+                    }
+                    canvas.drawPath(path, paint)
+                }
+            }
+            if (texts.isNotEmpty()) {
+                val tp = Paint().apply { isAntiAlias = true; color = SCRIBBLE_INK; textSize = 18f }
+                texts.forEach { (x, y, text) -> canvas.drawText(text, x, y + 16f, tp) }
+            }
+            ByteArrayOutputStream().also { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }.toByteArray()
+        } catch (e: Exception) {
+            null
+        } finally {
+            bmp.recycle()
+        }
+    }
+
+    private fun dataUri(png: ByteArray): String =
+        "data:image/png;base64," + Base64.encodeToString(png, Base64.NO_WRAP)
+
+    private fun boardTextNotes(content: String): List<String> {
+        val o = decodeJsonRaw(content) ?: return emptyList()
+        val t = o.optJSONArray("t") ?: JSONArray()
+        return (0 until t.length()).map { t.getJSONObject(it).optString("t") }.filter { it.isNotBlank() }
+    }
+
+    /** Every scribble in a note (a whole whiteboard, or each inline block), rasterised to PNG. */
+    private fun noteScribblePngs(note: Note): List<ByteArray> {
+        if (note.type == NoteType.SCRIBBLE) return listOfNotNull(whiteboardPng(note.content))
+        return note.content.split("\n").mapNotNull { line ->
+            SCRIBBLE.matchEntire(line.trim())?.let { scribbleBlockPng(it.groupValues[1]) }
+        }
+    }
+
+    private fun whiteboardHtml(content: String): String = buildString {
+        whiteboardPng(content)?.let { append("<img src=\"").append(dataUri(it)).append("\" alt=\"whiteboard\">") }
+            ?: append("<p><em>[Whiteboard]</em></p>")
+        val notes = boardTextNotes(content)
+        if (notes.isNotEmpty()) {
+            append("<p>Notes on the board:<br>")
+            append(notes.joinToString("<br>") { "- " + esc(it) })
+            append("</p>")
+        }
+    }
+
+    private fun whiteboardMd(content: String): String = buildString {
+        whiteboardPng(content)?.let { append("![whiteboard](").append(dataUri(it)).append(")\n") }
+            ?: append("_[Whiteboard]_\n")
+        val notes = boardTextNotes(content)
+        if (notes.isNotEmpty()) {
+            append("\nNotes on the board:\n")
+            append(notes.joinToString("\n") { "- $it" })
+        }
+    }.trimEnd()
+
     // ---- PDF --------------------------------------------------------------------
 
     private fun pdfBytes(note: Note): ByteArray {
@@ -489,6 +649,21 @@ object Exporter {
             y += lineH
         }
         doc.finishPage(page)
+        // Draw any scribbles/whiteboards as real images, each centered on its own page.
+        noteScribblePngs(note).forEach { png ->
+            val bmp = BitmapFactory.decodeByteArray(png, 0, png.size) ?: return@forEach
+            val sp = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, ++pageNum).create())
+            val availW = (pageW - 2 * margin).toFloat()
+            val availH = (pageH - 2 * margin).toFloat()
+            val fit = minOf(availW / bmp.width, availH / bmp.height, 1f)
+            val dw = bmp.width * fit
+            val dh = bmp.height * fit
+            val left = margin + (availW - dw) / 2f
+            val top = margin + (availH - dh) / 2f
+            sp.canvas.drawBitmap(bmp, null, RectF(left, top, left + dw, top + dh), null)
+            doc.finishPage(sp)
+            bmp.recycle()
+        }
         val bos = ByteArrayOutputStream()
         doc.writeTo(bos)
         doc.close()
