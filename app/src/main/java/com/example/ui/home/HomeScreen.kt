@@ -17,11 +17,13 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -118,6 +120,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.attachments.AttachmentStore
@@ -1006,12 +1009,12 @@ private fun NoteCard(
                         .height(120.dp),
                 )
             }
-            Row(modifier = Modifier.fillMaxWidth()) {
+            Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
                 if (accent != null) {
                     Box(
                         modifier = Modifier
                             .width(5.dp)
-                            .height(if (note.title.isNotBlank()) 108.dp else 88.dp)
+                            .fillMaxHeight()
                             .background(accent),
                     )
                 }
@@ -1262,6 +1265,9 @@ private fun FabAction(
     val iconTile: @Composable () -> Unit = {
         Box(
             modifier = Modifier
+                // Draw the tile (and its soft neumorphic glow) above the label chip so the chip's
+                // opaque rectangle never clips the glow, regardless of which side the icon is on.
+                .zIndex(1f)
                 .size(48.dp)
                 .neumorphicRaised(24.dp, neu, elevation = 7.dp)
                 .clip(CircleShape)

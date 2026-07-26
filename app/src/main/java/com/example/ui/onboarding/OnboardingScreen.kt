@@ -75,7 +75,7 @@ private val pages = listOf(
     OnboardingPage(
         icon = Icons.Rounded.Checklist,
         title = "Notes, checklists & more",
-        subtitle = "Write freely or build interactive checklists you can tick off. Pin, favourite, colour and archive to stay organised. Everything works offline, instantly - let's begin.",
+        subtitle = "Write freely or tick off interactive checklists. Pin, colour and archive to stay organised - all offline, instantly.",
     ),
 )
 

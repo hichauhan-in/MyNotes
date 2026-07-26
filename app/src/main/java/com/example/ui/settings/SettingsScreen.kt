@@ -23,11 +23,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Brightness6
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ColorLens
 import androidx.compose.material.icons.rounded.DarkMode
@@ -40,6 +45,7 @@ import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
+import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -47,7 +53,9 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -56,6 +64,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.NeuIconButton
 import com.example.ui.components.NeuSurface
@@ -69,6 +79,7 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val insets = WindowInsets.systemBars.asPaddingValues()
+    var showAppInfo by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -202,11 +213,15 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Info,
                     title = "Application Information",
                     subtitle = "Understanding MyNotes+",
-                    trailingLabel = "Soon",
-                    onClick = { },
+                    trailingIcon = Icons.Rounded.ChevronRight,
+                    onClick = { showAppInfo = true },
                 )
             }
         }
+    }
+
+    if (showAppInfo) {
+        AppInfoDialog(onDismiss = { showAppInfo = false })
     }
 }
 
@@ -459,4 +474,189 @@ private fun SettingsDivider() {
             .height(1.dp)
             .background(MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
     )
+}
+
+/**
+ * A full-screen "About the app" popup with a little breathing room around the edges. It explains
+ * what MyNotes+ is for, why it's useful, what's inside, and how it keeps notes private.
+ */
+@Composable
+private fun AppInfoDialog(onDismiss: () -> Unit) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        val insets = WindowInsets.systemBars.asPaddingValues()
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(
+                    top = insets.calculateTopPadding() + 20.dp,
+                    bottom = insets.calculateBottomPadding() + 20.dp,
+                    start = 16.dp,
+                    end = 16.dp,
+                ),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(MaterialTheme.colorScheme.surface),
+            ) {
+                // Branded header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(brandGradientHorizontal())
+                        .padding(20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color.White.copy(alpha = 0.18f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.AutoAwesome,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "MyNotes+",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White,
+                        )
+                        Text(
+                            text = "Private notes, truly yours",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(Color.White.copy(alpha = 0.18f))
+                            .clickable(onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+
+                // Scrollable body
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 22.dp, vertical = 22.dp),
+                ) {
+                    AppInfoSection(icon = Icons.Rounded.AutoAwesome, title = "Our mission") {
+                        AppInfoParagraph(
+                            "MyNotes+ is built on one idea: your notes belong to you and no one else. " +
+                                "It's a calm, private home for everything on your mind - with no accounts, no ads, " +
+                                "and no data mining. Just a fast, beautiful place to write, plan and remember.",
+                        )
+                    }
+                    AppInfoSection(icon = Icons.Rounded.Bolt, title = "Why you'll love it") {
+                        AppInfoBullet("Truly private - every note is encrypted on your device.")
+                        AppInfoBullet("Works fully offline, so it's instant wherever you are.")
+                        AppInfoBullet("No account, no tracking, no ads. Ever.")
+                        AppInfoBullet("Organise your way with books, tags, pins and colours.")
+                    }
+                    AppInfoSection(icon = Icons.Rounded.Widgets, title = "What's inside") {
+                        AppInfoBullet("Notes, checklists, tables and callouts.")
+                        AppInfoBullet("Whiteboards, expense trackers and spreadsheets.")
+                        AppInfoBullet("Photos, voice notes and reusable templates.")
+                        AppInfoBullet("A recoverable Trash so nothing is lost by accident.")
+                    }
+                    AppInfoSection(icon = Icons.Rounded.Shield, title = "Privacy & safety") {
+                        AppInfoParagraph(
+                            "Every note is locked with AES-256-GCM using a key held in your device's " +
+                                "hardware-backed keystore. Plaintext is never written to disk and never leaves your " +
+                                "device. Optional cloud backup uploads only encrypted data - the keys always stay " +
+                                "with you, so no one, not even us, can read your notes.",
+                        )
+                    }
+                    AppInfoSection(icon = Icons.Rounded.Lock, title = "In your control") {
+                        AppInfoParagraph(
+                            "Add an optional fingerprint or screen-lock to open the app, blur the preview in the " +
+                                "recent-apps switcher, and delete anything whenever you like. It's your space, on your terms.",
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppInfoSection(
+    icon: ImageVector,
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+    Spacer(Modifier.height(10.dp))
+    Column(Modifier.fillMaxWidth()) { content() }
+    Spacer(Modifier.height(22.dp))
+}
+
+@Composable
+private fun AppInfoParagraph(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun AppInfoBullet(text: String) {
+    Row(
+        modifier = Modifier.padding(vertical = 4.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(top = 7.dp)
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+        )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }

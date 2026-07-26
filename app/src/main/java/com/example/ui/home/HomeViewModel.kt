@@ -68,7 +68,7 @@ data class HomeUiState(
             NoteFilter.FAVORITES -> "Favorites"
             NoteFilter.PINNED -> "Pinned"
             NoteFilter.ARCHIVED -> "Archived"
-            NoteFilter.TRASH -> "Trash"
+            NoteFilter.TRASH -> "Deleted notes"
         }
 }
 

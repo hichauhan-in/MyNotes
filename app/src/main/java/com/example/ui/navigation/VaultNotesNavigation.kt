@@ -4,8 +4,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
@@ -44,25 +44,29 @@ private object Routes {
 @Composable
 fun MyNotesNavigation() {
     val navController = rememberNavController()
-    val dur = 240
+    val dur = 220
+    val outDur = 170
 
     NavHost(
         navController = navController,
         startDestination = Routes.HOME,
+        // A directional "shared axis" slide + fade: snappier and less heavy-feeling than a scale,
+        // so opening a screen (e.g. Expenses) reads as immediate rather than sluggish.
         enterTransition = {
             fadeIn(tween(dur, easing = FastOutSlowInEasing)) +
-                scaleIn(tween(dur, easing = FastOutSlowInEasing), initialScale = 0.97f)
+                slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { it / 6 }
         },
         exitTransition = {
-            fadeOut(tween(160, easing = FastOutSlowInEasing))
+            fadeOut(tween(outDur, easing = FastOutSlowInEasing)) +
+                slideOutHorizontally(tween(outDur, easing = FastOutSlowInEasing)) { -it / 14 }
         },
         popEnterTransition = {
             fadeIn(tween(dur, easing = FastOutSlowInEasing)) +
-                scaleIn(tween(dur, easing = FastOutSlowInEasing), initialScale = 0.97f)
+                slideInHorizontally(tween(dur, easing = FastOutSlowInEasing)) { -it / 14 }
         },
         popExitTransition = {
-            fadeOut(tween(160, easing = FastOutSlowInEasing)) +
-                scaleOut(tween(160, easing = FastOutSlowInEasing), targetScale = 0.97f)
+            fadeOut(tween(outDur, easing = FastOutSlowInEasing)) +
+                slideOutHorizontally(tween(outDur, easing = FastOutSlowInEasing)) { it / 6 }
         },
     ) {
         composable(Routes.HOME) {
