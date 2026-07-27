@@ -101,12 +101,19 @@ fun SettingsScreen(
         ActivityResultContracts.StartIntentSenderForResult(),
     ) { result ->
         val data = result.data
-        val authResult = if (data != null) {
-            runCatching { Identity.getAuthorizationClient(driveContext).getAuthorizationResultFromIntent(data) }.getOrNull()
-        } else null
-        val token = authResult?.accessToken
-        if (token != null) viewModel.onDriveAuthorized(token)
-        else viewModel.onDriveAuthFailed("Google sign-in was cancelled.")
+        if (data == null) {
+            viewModel.onDriveAuthFailed("Consent closed without a result (code ${result.resultCode}).")
+            return@rememberLauncherForActivityResult
+        }
+        val outcome = runCatching {
+            Identity.getAuthorizationClient(driveContext).getAuthorizationResultFromIntent(data)
+        }
+        val token = outcome.getOrNull()?.accessToken
+        when {
+            token != null -> viewModel.onDriveAuthorized(token)
+            outcome.isFailure -> viewModel.onDriveAuthFailed(outcome.exceptionOrNull()?.message ?: "Authorization failed.")
+            else -> viewModel.onDriveAuthFailed("No access token returned (code ${result.resultCode}).")
+        }
     }
     fun connectDrive() {
         viewModel.onDriveConnecting()
