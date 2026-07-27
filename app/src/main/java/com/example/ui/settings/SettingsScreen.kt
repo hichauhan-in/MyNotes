@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Brightness6
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudUpload
@@ -44,6 +46,8 @@ import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LightMode
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Person
@@ -51,6 +55,7 @@ import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Widgets
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -71,7 +76,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.google.android.gms.auth.api.identity.Identity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.sync.DriveAuth
 import com.example.ui.components.NeuIconButton
 import com.example.ui.components.NeuSurface
 import com.example.ui.theme.ThemeMode
@@ -83,8 +90,42 @@ fun SettingsScreen(
     onBack: () -> Unit,
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val insets = WindowInsets.systemBars.asPaddingValues()
     var showAppInfo by remember { mutableStateOf(false) }
+
+    // Google Drive connect flow: the Authorization API returns an access token directly, or a
+    // consent screen to launch first (for a first-time grant) - handled by this launcher.
+    val driveContext = LocalContext.current
+    val driveConsentLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val data = result.data
+        val authResult = if (data != null) {
+            runCatching { Identity.getAuthorizationClient(driveContext).getAuthorizationResultFromIntent(data) }.getOrNull()
+        } else null
+        val token = authResult?.accessToken
+        if (token != null) viewModel.onDriveAuthorized(token)
+        else viewModel.onDriveAuthFailed("Google sign-in was cancelled.")
+    }
+    fun connectDrive() {
+        viewModel.onDriveConnecting()
+        Identity.getAuthorizationClient(driveContext)
+            .authorize(DriveAuth.request())
+            .addOnSuccessListener { authResult ->
+                val pending = authResult.pendingIntent
+                if (authResult.hasResolution() && pending != null) {
+                    runCatching {
+                        driveConsentLauncher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
+                    }.onFailure { viewModel.onDriveAuthFailed(it.message) }
+                } else {
+                    val token = authResult.accessToken
+                    if (token != null) viewModel.onDriveAuthorized(token)
+                    else viewModel.onDriveAuthFailed("No access token was returned.")
+                }
+            }
+            .addOnFailureListener { viewModel.onDriveAuthFailed(it.message) }
+    }
 
     Column(
         modifier = Modifier
@@ -185,6 +226,55 @@ fun SettingsScreen(
                 )
                 AnimatedVisibility(visible = settings.cloudSyncEnabled) {
                     Column {
+                        Spacer(Modifier.height(12.dp))
+                        when {
+                            syncState.connecting -> {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(
+                                        color = MaterialTheme.colorScheme.primary,
+                                        strokeWidth = 2.dp,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(
+                                        text = "Connecting to Google Drive…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
+                            settings.driveAccountEmail == null -> {
+                                SettingsLinkRow(
+                                    icon = Icons.Rounded.Link,
+                                    title = "Connect Google Drive",
+                                    subtitle = "Choose the account to sync with",
+                                    trailingIcon = Icons.Rounded.ChevronRight,
+                                    onClick = { connectDrive() },
+                                )
+                            }
+                            else -> {
+                                SettingsLinkRow(
+                                    icon = Icons.Rounded.CheckCircle,
+                                    title = "Connected",
+                                    subtitle = settings.driveAccountEmail ?: "",
+                                )
+                                SettingsDivider()
+                                SettingsLinkRow(
+                                    icon = Icons.Rounded.LinkOff,
+                                    title = "Disconnect this device",
+                                    subtitle = "Stops syncing here; your Drive copy stays",
+                                    onClick = { viewModel.disconnectDrive() },
+                                )
+                            }
+                        }
+                        syncState.error?.let { error ->
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = error,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                         InfoBanner(
                             icon = Icons.Rounded.Shield,
