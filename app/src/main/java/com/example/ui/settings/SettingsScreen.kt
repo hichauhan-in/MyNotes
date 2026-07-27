@@ -257,6 +257,7 @@ fun SettingsScreen(
                                     icon = Icons.Rounded.CheckCircle,
                                     title = "Connected",
                                     subtitle = settings.driveAccountEmail ?: "",
+                                    onClick = {},
                                 )
                                 SettingsDivider()
                                 SettingsLinkRow(
