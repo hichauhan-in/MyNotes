@@ -2,8 +2,8 @@ package com.example.domain.model
 
 import androidx.compose.runtime.Immutable
 
-/** The kind of note: free text, an interactive checklist, a spreadsheet, an expense tracker, or a whiteboard. */
-enum class NoteType { TEXT, CHECKLIST, SHEET, EXPENSE, SCRIBBLE }
+/** The kind of note: free text, an interactive checklist, an expense tracker, or a whiteboard. */
+enum class NoteType { TEXT, CHECKLIST, EXPENSE, SCRIBBLE }
 
 /**
  * Decrypted, in-memory representation of a note. Instances of this class only ever
@@ -28,7 +28,6 @@ data class Note(
     val attachments: List<String> = emptyList(),
 ) {
     val isChecklist: Boolean get() = type == NoteType.CHECKLIST
-    val isSheet: Boolean get() = type == NoteType.SHEET
     val isExpense: Boolean get() = type == NoteType.EXPENSE
     val isScribble: Boolean get() = type == NoteType.SCRIBBLE
 
@@ -37,7 +36,6 @@ data class Note(
             isChecklist -> Checklist.parse(content).joinToString("   ") {
                 (if (it.checked) "✓ " else "○ ") + it.text
             }.trim()
-            isSheet -> "Spreadsheet"
             isExpense -> "Expense tracker"
             isScribble -> "Whiteboard"
             else -> AttachmentMarkup.stripTokens(content).trim().replace(Regex("\\s+"), " ")

@@ -84,7 +84,6 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Gesture
-import androidx.compose.material.icons.rounded.GridOn
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Lock
@@ -1409,12 +1408,11 @@ private fun NoteCard(
                         }
                     }
 
-                    if (note.isSheet || note.isExpense || note.isScribble) {
+                    if (note.isExpense || note.isScribble) {
                         Spacer(Modifier.height(10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = when {
-                                    note.isSheet -> Icons.Rounded.GridOn
                                     note.isExpense -> Icons.Rounded.AccountBalanceWallet
                                     else -> Icons.Rounded.Brush
                                 },
@@ -1425,7 +1423,6 @@ private fun NoteCard(
                             Spacer(Modifier.width(6.dp))
                             Text(
                                 text = when {
-                                    note.isSheet -> "Sheet"
                                     note.isExpense -> "Expenses"
                                     else -> "Whiteboard"
                                 },
@@ -1541,8 +1538,6 @@ private fun ExpandableFab(
         ) {
             Column(horizontalAlignment = Alignment.End) {
                 FabAction("New book", Icons.Rounded.CreateNewFolder) { onCreateBook() }
-                Spacer(Modifier.height(12.dp))
-                FabAction("Sheet", Icons.Rounded.GridOn) { onAction("sheet") }
                 Spacer(Modifier.height(12.dp))
                 FabAction("Expenses", Icons.Rounded.AccountBalanceWallet) { onAction("expense") }
                 Spacer(Modifier.height(12.dp))

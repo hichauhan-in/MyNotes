@@ -297,12 +297,6 @@ class EditorViewModel : ViewModel() {
             content = "[ ] \n[ ] \n[ ] ",
         )
 
-        "sheet" -> EditorUiState(
-            title = "Sheet",
-            type = NoteType.SHEET,
-            content = "",
-        )
-
         "expense" -> EditorUiState(
             title = "Expenses",
             type = NoteType.EXPENSE,

@@ -727,7 +727,7 @@ private fun AppInfoDialog(onDismiss: () -> Unit) {
                     }
                     AppInfoSection(icon = Icons.Rounded.Widgets, title = "What's inside") {
                         AppInfoBullet("Notes, checklists, tables and callouts.")
-                        AppInfoBullet("Whiteboards, expense trackers and spreadsheets.")
+                        AppInfoBullet("Whiteboards and expense trackers.")
                         AppInfoBullet("Photos, voice notes and reusable templates.")
                         AppInfoBullet("A recoverable Trash so nothing is lost by accident.")
                     }

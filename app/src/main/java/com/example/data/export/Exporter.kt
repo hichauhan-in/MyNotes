@@ -183,7 +183,6 @@ object Exporter {
     private fun bodyText(note: Note): String = when (note.type) {
         NoteType.CHECKLIST -> Checklist.parse(note.content)
             .joinToString("\n") { (if (it.checked) "[x] " else "[ ] ") + it.text }
-        NoteType.SHEET -> tableToText(sheetCells(note.content))
         NoteType.EXPENSE -> expenseLines(note.content).joinToString("\n")
         NoteType.SCRIBBLE -> scribbleToText(note.content)
         else -> textNoteToPlain(note.content)
@@ -192,7 +191,6 @@ object Exporter {
     private fun bodyMd(note: Note): String = when (note.type) {
         NoteType.CHECKLIST -> Checklist.parse(note.content)
             .joinToString("\n") { "- [${if (it.checked) "x" else " "}] " + it.text }
-        NoteType.SHEET -> tableToMd(sheetCells(note.content))
         NoteType.EXPENSE -> expenseMd(note.content)
         NoteType.SCRIBBLE -> whiteboardMd(note.content)
         else -> textNoteToMd(note.content)
@@ -200,7 +198,6 @@ object Exporter {
 
     private fun bodyHtml(note: Note): String = when (note.type) {
         NoteType.CHECKLIST -> checklistHtml(note.content)
-        NoteType.SHEET -> tableToHtml(sheetCells(note.content))
         NoteType.EXPENSE -> expenseHtml(note.content)
         NoteType.SCRIBBLE -> whiteboardHtml(note.content)
         else -> textNoteToHtml(note.content)
@@ -337,7 +334,7 @@ object Exporter {
         return r
     }
 
-    // ---- Checklist / sheet / expense / scribble ---------------------------------
+    // ---- Checklist / expense / scribble -----------------------------------------
 
     private fun checklistHtml(content: String): String {
         val items = Checklist.parse(content)
@@ -346,14 +343,6 @@ object Exporter {
             "<li>" + (if (it.checked) "☑ " else "☐ ") + esc(it.text) + "</li>"
         } + "</ul>"
     }
-
-    private fun sheetCells(content: String): List<List<String>> = runCatching {
-        val c = JSONObject(content).optJSONArray("c") ?: return emptyList()
-        (0 until c.length()).map { r ->
-            val row = c.getJSONArray(r)
-            (0 until row.length()).map { row.optString(it) }
-        }
-    }.getOrDefault(emptyList())
 
     private fun decodeCells(b64: String): List<List<String>> {
         val c = decodeJson(b64)?.optJSONArray("c") ?: return emptyList()

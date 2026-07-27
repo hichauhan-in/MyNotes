@@ -517,7 +517,7 @@ fun EditorScreen(
                     checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
                 }
             }
-            NoteType.SHEET, NoteType.EXPENSE, NoteType.SCRIBBLE -> {
+            NoteType.EXPENSE, NoteType.SCRIBBLE -> {
                 // These types parse inside their own editors.
             }
             else -> {
@@ -597,18 +597,6 @@ fun EditorScreen(
         }
 
         when (state.type) {
-            NoteType.SHEET -> DeferredEditorBody(modifier = Modifier.weight(1f)) {
-                SheetEditor(
-                    seedKey = state.id,
-                    title = state.title,
-                    content = state.content,
-                    onTitleChange = viewModel::onTitleChanged,
-                    onContentChange = viewModel::onContentChanged,
-                    meta = metaBar,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
-
             NoteType.EXPENSE -> DeferredEditorBody(modifier = Modifier.weight(1f)) {
                 ExpenseEditor(
                     seedKey = state.id,
@@ -1132,7 +1120,7 @@ private fun OverflowMenuRow(
 }
 
 /**
- * Delays composing a heavy editor body (Sheets grid / Expense cards) for a beat and fades it in,
+ * Delays composing a heavy editor body (Expense cards) for a beat and fades it in,
  * so the screen-open animation runs on a light first frame and never stutters. Lighter editors
  * (text, checklist, scribble) don't need this because they compose cheaply.
  */
