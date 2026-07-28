@@ -319,7 +319,8 @@ internal fun ExpenseEditor(
     val accounts = model.accounts
     val selectedIndex = selected.coerceIn(0, maxOf(0, accounts.size - 1))
     val account = accounts.getOrNull(selectedIndex)
-    val accentFor: (ExpAccount) -> Color = { a -> a.colorArgb.takeIf { it != 0 }?.let { Color(it) } ?: MaterialTheme.colorScheme.primary }
+    val defaultAccent = MaterialTheme.colorScheme.primary
+    val accentFor: (ExpAccount) -> Color = { a -> a.colorArgb.takeIf { it != 0 }?.let { Color(it) } ?: defaultAccent }
 
     LazyColumn(
         modifier = modifier
