@@ -1,5 +1,6 @@
 package com.example.ui.home
 
+import android.content.Context
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Delete
@@ -15,6 +16,8 @@ import com.example.di.AppContainer
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Folder
 import com.example.domain.model.Note
+import com.example.data.sync.SyncCoordinator
+import com.example.data.sync.SyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -80,6 +83,25 @@ class HomeViewModel : ViewModel() {
     private val repository = AppContainer.noteRepository!!
     private val folders = AppContainer.folderRepository!!
     private val settings = AppContainer.settingsRepository!!
+    private val syncManager = AppContainer.cloudSyncManager!!
+
+    /** True when Drive sync is set up on this device (connected + recovery key unlocked). */
+    val syncEnabled: StateFlow<Boolean> = settings.settings
+        .map { it.driveAccountEmail != null && it.recoveryConfigured }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** True when a Google Drive account is connected (enables "Share a link", which doesn't need the key). */
+    val driveConnected: StateFlow<Boolean> = settings.settings
+        .map { it.driveAccountEmail != null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** True while a sync is running (drives the animated "+" on Home). */
+    val syncing: StateFlow<Boolean> = SyncStatus.syncing
+
+    /** User tapped the "+": run a sync now (no-op unless connected). */
+    fun triggerSync(context: Context) {
+        SyncCoordinator.manualSync(context.applicationContext, settings, syncManager, AppContainer.applicationScope)
+    }
 
     val trashRetentionDays: StateFlow<Int> = settings.settings
         .map { it.trashRetentionDays }
@@ -307,13 +329,18 @@ class HomeViewModel : ViewModel() {
     }
 
     // ---- Book CRUD ----
-    fun createBook(name: String) = viewModelScope.launch {
+    fun createBook(name: String, colorArgb: Int = 0) = viewModelScope.launch {
         val parent = if (_filter.value == NoteFilter.ALL) _currentFolderId.value else null
-        folders.createFolder(name, parent)
+        folders.createFolder(name, parent, colorArgb)
     }
 
     fun renameBook(id: String, name: String) = viewModelScope.launch {
         folders.renameFolder(id, name)
+    }
+
+    /** Update a book's colour label (0 = default gradient). */
+    fun setBookColor(id: String, colorArgb: Int) = viewModelScope.launch {
+        folders.setFolderColor(id, colorArgb)
     }
 
     fun deleteBook(id: String) {

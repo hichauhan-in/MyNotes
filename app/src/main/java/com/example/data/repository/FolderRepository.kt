@@ -24,10 +24,19 @@ class FolderRepository(
         list.map { it.toFolder() }
     }
 
-    suspend fun createFolder(name: String, parentId: String?): String = withContext(Dispatchers.IO) {
-        val folder = FolderEntity(name = name.trim().ifBlank { "Untitled book" }, parentId = parentId)
+    suspend fun createFolder(name: String, parentId: String?, colorArgb: Int = 0): String = withContext(Dispatchers.IO) {
+        val folder = FolderEntity(
+            name = name.trim().ifBlank { "Untitled book" },
+            parentId = parentId,
+            colorArgb = colorArgb,
+        )
         folderDao.insertFolder(folder)
         folder.id
+    }
+
+    /** Update a book's colour label (0 = default). */
+    suspend fun setFolderColor(id: String, colorArgb: Int) = withContext(Dispatchers.IO) {
+        folderDao.setFolderColor(id, colorArgb)
     }
 
     /** The ids of every existing book, used by cloud sync to detect dangling folder references. */

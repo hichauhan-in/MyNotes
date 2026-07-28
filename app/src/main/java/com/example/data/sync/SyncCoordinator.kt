@@ -45,6 +45,23 @@ object SyncCoordinator {
         }
     }
 
+    /** User-initiated sync (the Home "+" tap). No throttle; skipped only if a sync is already running. */
+    fun manualSync(
+        context: Context,
+        settings: SettingsRepository,
+        manager: CloudSyncManager,
+        scope: CoroutineScope,
+    ) {
+        if (SyncStatus.syncing.value) return
+        scope.launch {
+            val snapshot = settings.snapshot()
+            if (snapshot.driveAccountEmail == null || !snapshot.recoveryConfigured) return@launch
+            if (!manager.hasLocalKey()) return@launch
+            val token = silentToken(context.applicationContext) ?: return@launch
+            manager.syncNow(token)
+        }
+    }
+
     /** Gets a Drive access token without any UI, or null if consent would be required / it fails. */
     private suspend fun silentToken(context: Context): String? = suspendCancellableCoroutine { cont ->
         Identity.getAuthorizationClient(context)

@@ -75,6 +75,11 @@ class EditorViewModel : ViewModel() {
         settings.settings.map { it.defaultExportFolder }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** True when a Google Drive account is connected (enables "Share a link"). */
+    val driveConnected: StateFlow<Boolean> =
+        settings.settings.map { it.driveAccountEmail != null }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     private var persisted = false
     private var autoSaveJob: Job? = null
     private var loaded = false

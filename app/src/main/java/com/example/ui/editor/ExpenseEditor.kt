@@ -1,6 +1,7 @@
 package com.example.ui.editor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -9,9 +10,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,9 +28,11 @@ import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Flight
 import androidx.compose.material.icons.rounded.Home
@@ -44,6 +47,7 @@ import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material.icons.rounded.Smartphone
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.TrendingUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -76,119 +80,167 @@ import java.text.NumberFormat
 import java.util.Locale
 import java.util.UUID
 
-/** ALLOCATION sections spend from income (expenses / savings / …); ACCOUNT sections just track balances. */
-private enum class SectionKind { ALLOCATION, ACCOUNT }
+// ---- Model ---------------------------------------------------------------------
 
-private data class ExpenseItem(val id: String, val name: String, val amount: Double)
-private data class ExpenseSection(
+private data class ExpItem(val id: String, val name: String, val amount: Double)
+
+private data class ExpSection(
     val id: String,
     val name: String,
     val iconKey: String,
-    val kind: SectionKind,
-    val items: List<ExpenseItem>,
+    /** When true, this section's total is subtracted from the account's available balance. */
+    val deductFromBalance: Boolean,
+    val items: List<ExpItem>,
 )
 
-private data class ExpenseModel(
-    val income: Double,
-    val sections: List<ExpenseSection>,
+private data class ExpAccount(
+    val id: String,
+    val name: String,
+    val iconKey: String,
+    val colorArgb: Int,
+    val balance: Double,
+    val tags: List<String>,
+    val sections: List<ExpSection>,
 )
 
-private fun newItem() = ExpenseItem(UUID.randomUUID().toString(), "", 0.0)
+private data class ExpenseModel(val accounts: List<ExpAccount>)
 
-private fun defaultExpense(): ExpenseModel = ExpenseModel(
-    income = 0.0,
-    sections = listOf(
-        ExpenseSection(UUID.randomUUID().toString(), "Expenses", "expense", SectionKind.ALLOCATION, emptyList()),
-        ExpenseSection(UUID.randomUUID().toString(), "Savings", "savings", SectionKind.ALLOCATION, emptyList()),
-        ExpenseSection(UUID.randomUUID().toString(), "Investments", "invest", SectionKind.ALLOCATION, emptyList()),
-    ),
-)
+private fun newItem() = ExpItem(UUID.randomUUID().toString(), "", 0.0)
+
+private fun ExpAccount.deductible(): Double =
+    sections.filter { it.deductFromBalance }.sumOf { s -> s.items.sumOf { it.amount } }
 
 private fun parseExpense(content: String): ExpenseModel = runCatching {
-    if (content.isBlank()) return@runCatching defaultExpense()
+    if (content.isBlank()) return@runCatching ExpenseModel(emptyList())
     val obj = JSONObject(content)
-    val income = obj.optDouble("income", 0.0)
-    if (obj.has("sections")) {
-        val secArr = obj.getJSONArray("sections")
-        val sections = (0 until secArr.length()).map { i ->
-            val o = secArr.getJSONObject(i)
-            val kind = runCatching { SectionKind.valueOf(o.optString("kind", "ALLOCATION")) }
-                .getOrDefault(SectionKind.ALLOCATION)
-            val itemsArr = o.optJSONArray("items") ?: JSONArray()
-            val items = (0 until itemsArr.length()).map { j ->
-                val it = itemsArr.getJSONObject(j)
-                ExpenseItem(
-                    it.optString("id", UUID.randomUUID().toString()),
-                    it.optString("name"),
-                    it.optDouble("amount", 0.0),
-                )
+    if (obj.optInt("version", 1) >= 2 && obj.has("accounts")) {
+        parseAccounts(obj.getJSONArray("accounts"))
+    } else {
+        migrateOld(obj)
+    }
+}.getOrDefault(ExpenseModel(emptyList()))
+
+private fun parseAccounts(arr: JSONArray): ExpenseModel {
+    val accounts = (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        val tags = o.optJSONArray("tags")?.let { t ->
+            (0 until t.length()).map { t.optString(it) }.filter { it.isNotBlank() }
+        } ?: emptyList()
+        val secArr = o.optJSONArray("sections") ?: JSONArray()
+        val sections = (0 until secArr.length()).map { j ->
+            val so = secArr.getJSONObject(j)
+            val itemsArr = so.optJSONArray("items") ?: JSONArray()
+            val items = (0 until itemsArr.length()).map { k ->
+                val io = itemsArr.getJSONObject(k)
+                ExpItem(io.optString("id", UUID.randomUUID().toString()), io.optString("name"), io.optDouble("amount", 0.0))
             }
-            ExpenseSection(
-                o.optString("id", UUID.randomUUID().toString()),
-                o.optString("name"),
-                o.optString("icon", "other"),
-                kind,
+            ExpSection(
+                so.optString("id", UUID.randomUUID().toString()),
+                so.optString("name"),
+                so.optString("icon", "other"),
+                so.optBoolean("deduct", true),
                 items,
             )
         }
-        ExpenseModel(income, sections)
-    } else {
-        // Migrate the legacy { accounts, entries } layout into sections.
-        val entArr = obj.optJSONArray("entries") ?: JSONArray()
-        val entryObjects = (0 until entArr.length()).map { entArr.getJSONObject(it) }
-        fun itemsFor(cat: String): List<ExpenseItem> =
-            entryObjects
-                .filter { it.optString("cat", "EXPENSE") == cat }
-                .map {
-                    ExpenseItem(
-                        it.optString("id", UUID.randomUUID().toString()),
-                        it.optString("name"),
-                        it.optDouble("amount", 0.0),
-                    )
-                }
-        val accArr = obj.optJSONArray("accounts") ?: JSONArray()
-        val accItems = (0 until accArr.length()).map { i ->
-            val o = accArr.getJSONObject(i)
-            ExpenseItem(o.optString("id", UUID.randomUUID().toString()), o.optString("name"), o.optDouble("balance", 0.0))
-        }
-        val sections = listOf(
-            ExpenseSection(UUID.randomUUID().toString(), "Expenses", "expense", SectionKind.ALLOCATION, itemsFor("EXPENSE")),
-            ExpenseSection(UUID.randomUUID().toString(), "Savings", "savings", SectionKind.ALLOCATION, itemsFor("SAVINGS")),
-            ExpenseSection(UUID.randomUUID().toString(), "Investments", "invest", SectionKind.ALLOCATION, itemsFor("INVESTMENT")),
-            ExpenseSection(UUID.randomUUID().toString(), "Accounts", "account", SectionKind.ACCOUNT, accItems),
+        ExpAccount(
+            o.optString("id", UUID.randomUUID().toString()),
+            o.optString("name"),
+            o.optString("icon", "account"),
+            o.optInt("color", 0),
+            o.optDouble("balance", 0.0),
+            tags,
+            sections,
         )
-        ExpenseModel(income, sections)
     }
-}.getOrDefault(defaultExpense())
+    return ExpenseModel(accounts)
+}
+
+/** Migrates the older single-income model (or the legacy entries model) into one "Main" account. */
+private fun migrateOld(obj: JSONObject): ExpenseModel {
+    val income = obj.optDouble("income", 0.0)
+    val allocationSections = mutableListOf<ExpSection>()
+    val accountItems = mutableListOf<ExpItem>()
+
+    if (obj.has("sections")) {
+        val secArr = obj.getJSONArray("sections")
+        for (i in 0 until secArr.length()) {
+            val o = secArr.getJSONObject(i)
+            val itemsArr = o.optJSONArray("items") ?: JSONArray()
+            val items = (0 until itemsArr.length()).map { j ->
+                val it2 = itemsArr.getJSONObject(j)
+                ExpItem(it2.optString("id", UUID.randomUUID().toString()), it2.optString("name"), it2.optDouble("amount", 0.0))
+            }
+            if (o.optString("kind", "ALLOCATION") == "ACCOUNT") {
+                accountItems += items
+            } else {
+                allocationSections += ExpSection(
+                    o.optString("id", UUID.randomUUID().toString()),
+                    o.optString("name"), o.optString("icon", "other"), true, items,
+                )
+            }
+        }
+    } else {
+        val entArr = obj.optJSONArray("entries") ?: JSONArray()
+        val entries = (0 until entArr.length()).map { entArr.getJSONObject(it) }
+        fun itemsFor(cat: String) = entries.filter { it.optString("cat", "EXPENSE") == cat }.map {
+            ExpItem(it.optString("id", UUID.randomUUID().toString()), it.optString("name"), it.optDouble("amount", 0.0))
+        }
+        itemsFor("EXPENSE").takeIf { it.isNotEmpty() }?.let {
+            allocationSections += ExpSection(UUID.randomUUID().toString(), "Expenses", "expense", true, it)
+        }
+        itemsFor("SAVINGS").takeIf { it.isNotEmpty() }?.let {
+            allocationSections += ExpSection(UUID.randomUUID().toString(), "Savings", "savings", true, it)
+        }
+        itemsFor("INVESTMENT").takeIf { it.isNotEmpty() }?.let {
+            allocationSections += ExpSection(UUID.randomUUID().toString(), "Investments", "invest", true, it)
+        }
+        val accArr = obj.optJSONArray("accounts") ?: JSONArray()
+        for (i in 0 until accArr.length()) {
+            val o = accArr.getJSONObject(i)
+            accountItems += ExpItem(o.optString("id", UUID.randomUUID().toString()), o.optString("name"), o.optDouble("balance", 0.0))
+        }
+    }
+
+    val accounts = mutableListOf<ExpAccount>()
+    if (income != 0.0 || allocationSections.isNotEmpty()) {
+        accounts += ExpAccount(UUID.randomUUID().toString(), "Main", "account", 0, income, emptyList(), allocationSections)
+    }
+    accountItems.forEach {
+        accounts += ExpAccount(UUID.randomUUID().toString(), it.name.ifBlank { "Account" }, "account", 0, it.amount, emptyList(), emptyList())
+    }
+    return ExpenseModel(accounts)
+}
 
 private fun serializeExpense(model: ExpenseModel): String {
-    val obj = JSONObject()
-    obj.put("income", model.income)
-    val secArr = JSONArray()
-    model.sections.forEach { s ->
-        val itemsArr = JSONArray()
-        s.items.forEach { item ->
-            itemsArr.put(JSONObject().put("id", item.id).put("name", item.name).put("amount", item.amount))
+    val accArr = JSONArray()
+    model.accounts.forEach { a ->
+        val secArr = JSONArray()
+        a.sections.forEach { s ->
+            val itemsArr = JSONArray()
+            s.items.forEach { itemsArr.put(JSONObject().put("id", it.id).put("name", it.name).put("amount", it.amount)) }
+            secArr.put(
+                JSONObject()
+                    .put("id", s.id).put("name", s.name).put("icon", s.iconKey)
+                    .put("deduct", s.deductFromBalance).put("items", itemsArr),
+            )
         }
-        secArr.put(
+        val tagsArr = JSONArray()
+        a.tags.forEach { tagsArr.put(it) }
+        accArr.put(
             JSONObject()
-                .put("id", s.id)
-                .put("name", s.name)
-                .put("icon", s.iconKey)
-                .put("kind", s.kind.name)
-                .put("items", itemsArr),
+                .put("id", a.id).put("name", a.name).put("icon", a.iconKey).put("color", a.colorArgb)
+                .put("balance", a.balance).put("tags", tagsArr).put("sections", secArr),
         )
     }
-    obj.put("sections", secArr)
-    return obj.toString()
+    return JSONObject().put("version", 2).put("accounts", accArr).toString()
 }
 
 private val sectionIconOptions: List<Pair<String, ImageVector>> = listOf(
+    "account" to Icons.Rounded.AccountBalance,
+    "salary" to Icons.Rounded.Payments,
     "expense" to Icons.Rounded.ShoppingCart,
     "savings" to Icons.Rounded.Savings,
     "invest" to Icons.Rounded.TrendingUp,
-    "account" to Icons.Rounded.AccountBalance,
-    "salary" to Icons.Rounded.Payments,
     "home" to Icons.Rounded.Home,
     "bills" to Icons.Rounded.ReceiptLong,
     "food" to Icons.Rounded.Restaurant,
@@ -207,19 +259,33 @@ private val sectionIconOptions: List<Pair<String, ImageVector>> = listOf(
 private fun sectionIcon(key: String): ImageVector =
     sectionIconOptions.firstOrNull { it.first == key }?.second ?: Icons.Rounded.Category
 
-private val moneyFormat: NumberFormat = NumberFormat.getNumberInstance(Locale.US).apply {
-    maximumFractionDigits = 2
-}
+private val accountColorChoices = listOf(
+    0,
+    0xFF7E57C2.toInt(),
+    0xFF5C6BC0.toInt(),
+    0xFF42A5F5.toInt(),
+    0xFF26A69A.toInt(),
+    0xFF66BB6A.toInt(),
+    0xFFFFCA28.toInt(),
+    0xFFEF6C00.toInt(),
+    0xFFEC407A.toInt(),
+    0xFFEF5350.toInt(),
+)
 
+private val presetTags = listOf("Salary", "Primary", "Savings", "Emergency", "Joint", "Business", "Bills", "Cash")
+
+private val moneyFormat: NumberFormat = NumberFormat.getNumberInstance(Locale.US).apply { maximumFractionDigits = 2 }
 private fun formatMoney(v: Double): String = "₹" + moneyFormat.format(v)
-
 private fun plainAmount(v: Double): String =
     if (v == 0.0) "" else if (v % 1.0 == 0.0) v.toLong().toString() else v.toString()
 
+// ---- Editor --------------------------------------------------------------------
+
 /**
- * A fully customisable budgeting dashboard: income, then any number of sections the user can
- * add, rename and remove. "Allocation" sections spend from income and feed the live unallocated
- * total and bar; "balances" sections (like accounts) simply track amounts.
+ * A multi-account money tracker: swipeable account tabs, each with its own balance, tags and
+ * user-created sections (savings / investments / bills …). Send money in or out, transfer between
+ * your own accounts, and mark which sections spend from the balance. Nothing is added by default -
+ * the user builds their accounts and sections.
  */
 @Composable
 internal fun ExpenseEditor(
@@ -233,174 +299,195 @@ internal fun ExpenseEditor(
 ) {
     var model by remember { mutableStateOf(parseExpense(content)) }
     LaunchedEffect(seedKey) { model = parseExpense(content) }
+    var selected by remember { mutableStateOf(0) }
+    var showAddAccount by remember { mutableStateOf(false) }
+    var editAccountId by remember { mutableStateOf<String?>(null) }
+    var showSend by remember { mutableStateOf(false) }
+    var showTransfer by remember { mutableStateOf(false) }
     var showAddSection by remember { mutableStateOf(false) }
+    val readOnly = LocalReadOnly.current
 
-    fun update(newModel: ExpenseModel) {
-        model = newModel
-        onContentChange(serializeExpense(newModel))
+    fun update(m: ExpenseModel) {
+        model = m
+        onContentChange(serializeExpense(m))
     }
+    fun updateAccount(id: String, transform: (ExpAccount) -> ExpAccount) =
+        update(model.copy(accounts = model.accounts.map { if (it.id == id) transform(it) else it }))
+    fun updateSection(accId: String, secId: String, transform: (ExpSection) -> ExpSection) =
+        updateAccount(accId) { a -> a.copy(sections = a.sections.map { if (it.id == secId) transform(it) else it }) }
 
-    fun updateSection(id: String, transform: (ExpenseSection) -> ExpenseSection) =
-        update(model.copy(sections = model.sections.map { if (it.id == id) transform(it) else it }))
-
-    val allocationSections = model.sections.filter { it.kind == SectionKind.ALLOCATION }
-    val allocationTotal = allocationSections.sumOf { s -> s.items.sumOf { it.amount } }
-    val remaining = model.income - allocationTotal
-
-    val accountColor = MaterialTheme.colorScheme.primary
-    val palette = listOf(
-        MaterialTheme.colorScheme.error,
-        MaterialTheme.colorScheme.tertiary,
-        MaterialTheme.colorScheme.secondary,
-        MaterialTheme.colorScheme.primary,
-        Color(0xFF7E57C2),
-        Color(0xFF26A69A),
-        Color(0xFFEF6C00),
-        Color(0xFFEC407A),
-    )
-    val allocColorById = allocationSections
-        .mapIndexed { i, s -> s.id to palette[i % palette.size] }
-        .toMap()
-    fun colorFor(section: ExpenseSection): Color = allocColorById[section.id] ?: accountColor
+    val accounts = model.accounts
+    val selectedIndex = selected.coerceIn(0, maxOf(0, accounts.size - 1))
+    val account = accounts.getOrNull(selectedIndex)
+    val accentFor: (ExpAccount) -> Color = { a -> a.colorArgb.takeIf { it != 0 }?.let { Color(it) } ?: MaterialTheme.colorScheme.primary }
 
     LazyColumn(
-        modifier = modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(horizontal = 16.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .imePadding(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
     ) {
         item {
             Spacer(Modifier.height(8.dp))
-            BasicTextField(
-                value = title,
-                onValueChange = onTitleChange,
-                textStyle = MaterialTheme.typography.headlineSmall.copy(
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                singleLine = true,
-                readOnly = LocalReadOnly.current,
-                decorationBox = { inner ->
-                    if (title.isEmpty()) {
-                        Text(
-                            text = "e.g. July salary",
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        )
-                    }
-                    inner()
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Box {
+                if (title.isEmpty()) {
+                    Text(
+                        text = "e.g. My money",
+                        style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    )
+                }
+                BasicTextField(
+                    value = title,
+                    onValueChange = onTitleChange,
+                    textStyle = MaterialTheme.typography.headlineSmall.copy(
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    singleLine = true,
+                    readOnly = readOnly,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             Spacer(Modifier.height(12.dp))
             meta()
             Spacer(Modifier.height(16.dp))
-
-            // Income
-            ExpenseCard {
-                Text(
-                    text = "Income this month",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-                MoneyField(
-                    value = model.income,
-                    onChange = { update(model.copy(income = it)) },
-                    textStyle = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                )
-            }
-
-            Spacer(Modifier.height(14.dp))
-
-            // Summary
-            ExpenseCard {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = if (remaining >= 0) "Unallocated" else "Over-allocated",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = formatMoney(kotlin.math.abs(remaining)),
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = if (remaining >= 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                        )
-                    }
-                    Text(
-                        text = "of ${formatMoney(model.income)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                AllocationBar(
-                    income = model.income,
-                    allocated = allocationTotal,
-                    segments = allocationSections.map { s -> s.items.sumOf { it.amount } to colorFor(s) },
-                )
-                if (allocationSections.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    allocationSections.forEach { s ->
-                        LegendRow(
-                            label = s.name.ifBlank { "Untitled" },
-                            amount = s.items.sumOf { it.amount },
-                            color = colorFor(s),
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(14.dp))
-        }
-
-        items(model.sections, key = { it.id }) { section ->
-            SectionCard(
-                section = section,
-                accent = colorFor(section),
-                onRename = { newName -> updateSection(section.id) { it.copy(name = newName) } },
-                onAddItem = { updateSection(section.id) { it.copy(items = it.items + newItem()) } },
-                onItemName = { itemId, v ->
-                    updateSection(section.id) { s ->
-                        s.copy(items = s.items.map { if (it.id == itemId) it.copy(name = v) else it })
-                    }
-                },
-                onItemAmount = { itemId, v ->
-                    updateSection(section.id) { s ->
-                        s.copy(items = s.items.map { if (it.id == itemId) it.copy(amount = v) else it })
-                    }
-                },
-                onDeleteItem = { itemId ->
-                    updateSection(section.id) { s -> s.copy(items = s.items.filterNot { it.id == itemId }) }
-                },
-                onRemoveSection = {
-                    update(model.copy(sections = model.sections.filterNot { it.id == section.id }))
-                },
+            AccountTabs(
+                accounts = accounts,
+                selectedIndex = selectedIndex,
+                accentFor = accentFor,
+                showAdd = !readOnly,
+                onSelect = { selected = it },
+                onAdd = { showAddAccount = true },
             )
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
         }
 
-        item {
-            AddSectionButton(onClick = { showAddSection = true })
-            Spacer(Modifier.height(28.dp))
+        if (account == null) {
+            item {
+                EmptyAccounts(readOnly = readOnly, onAdd = { showAddAccount = true })
+                Spacer(Modifier.height(24.dp))
+            }
+        } else {
+            item(key = "header_${account.id}") {
+                AccountHeaderCard(
+                    account = account,
+                    accent = accentFor(account),
+                    readOnly = readOnly,
+                    canTransfer = accounts.size > 1,
+                    onBalance = { updateAccount(account.id) { a -> a.copy(balance = it) } },
+                    onSend = { showSend = true },
+                    onTransfer = { showTransfer = true },
+                    onEdit = { editAccountId = account.id },
+                    onDelete = {
+                        update(model.copy(accounts = model.accounts.filterNot { it.id == account.id }))
+                        selected = 0
+                    },
+                    onRenameText = { newName -> updateAccount(account.id) { it.copy(name = newName) } },
+                )
+                Spacer(Modifier.height(14.dp))
+            }
+            items(account.sections, key = { it.id }) { section ->
+                SectionCard(
+                    section = section,
+                    accent = accentFor(account),
+                    onRename = { v -> updateSection(account.id, section.id) { it.copy(name = v) } },
+                    onToggleDeduct = { updateSection(account.id, section.id) { it.copy(deductFromBalance = !it.deductFromBalance) } },
+                    onAddItem = { updateSection(account.id, section.id) { it.copy(items = it.items + newItem()) } },
+                    onItemName = { itemId, v ->
+                        updateSection(account.id, section.id) { s -> s.copy(items = s.items.map { if (it.id == itemId) it.copy(name = v) else it }) }
+                    },
+                    onItemAmount = { itemId, v ->
+                        updateSection(account.id, section.id) { s -> s.copy(items = s.items.map { if (it.id == itemId) it.copy(amount = v) else it }) }
+                    },
+                    onDeleteItem = { itemId ->
+                        updateSection(account.id, section.id) { s -> s.copy(items = s.items.filterNot { it.id == itemId }) }
+                    },
+                    onRemoveSection = {
+                        updateAccount(account.id) { a -> a.copy(sections = a.sections.filterNot { it.id == section.id }) }
+                    },
+                )
+                Spacer(Modifier.height(14.dp))
+            }
+            if (!readOnly) {
+                item {
+                    AddSectionButton(onClick = { showAddSection = true })
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
         }
     }
 
-    if (showAddSection) {
-        AddSectionDialog(
-            onAdd = { name, iconKey, kind ->
+    if (showAddAccount) {
+        AccountDialog(
+            title = "New account",
+            confirmLabel = "Add",
+            onConfirm = { name, icon, color, tags ->
+                update(model.copy(accounts = model.accounts + ExpAccount(UUID.randomUUID().toString(), name, icon, color, 0.0, tags, emptyList())))
+                selected = model.accounts.lastIndex
+                showAddAccount = false
+            },
+            onDismiss = { showAddAccount = false },
+        )
+    }
+
+    editAccountId?.let { id ->
+        val a = accounts.firstOrNull { it.id == id }
+        if (a == null) {
+            editAccountId = null
+        } else {
+            AccountDialog(
+                title = "Edit account",
+                confirmLabel = "Save",
+                initialName = a.name,
+                initialIcon = a.iconKey,
+                initialColor = a.colorArgb,
+                initialTags = a.tags,
+                onConfirm = { name, icon, color, tags ->
+                    updateAccount(id) { it.copy(name = name, iconKey = icon, colorArgb = color, tags = tags) }
+                    editAccountId = null
+                },
+                onDismiss = { editAccountId = null },
+            )
+        }
+    }
+
+    if (showSend && account != null) {
+        SendMoneyDialog(
+            accountName = account.name.ifBlank { "this account" },
+            onDone = { delta -> updateAccount(account.id) { it.copy(balance = it.balance + delta) } },
+            onDismiss = { showSend = false },
+        )
+    }
+
+    if (showTransfer && account != null) {
+        TransferDialog(
+            fromName = account.name.ifBlank { "This account" },
+            others = accounts.filter { it.id != account.id },
+            onTransfer = { targetId, amount ->
                 update(
                     model.copy(
-                        sections = model.sections + ExpenseSection(
-                            id = UUID.randomUUID().toString(),
-                            name = name,
-                            iconKey = iconKey,
-                            kind = kind,
-                            items = emptyList(),
-                        ),
+                        accounts = model.accounts.map {
+                            when (it.id) {
+                                account.id -> it.copy(balance = it.balance - amount)
+                                targetId -> it.copy(balance = it.balance + amount)
+                                else -> it
+                            }
+                        },
                     ),
                 )
+            },
+            onDismiss = { showTransfer = false },
+        )
+    }
+
+    if (showAddSection && account != null) {
+        AddSectionDialog(
+            onAdd = { name, icon, deduct ->
+                updateAccount(account.id) { a ->
+                    a.copy(sections = a.sections + ExpSection(UUID.randomUUID().toString(), name, icon, deduct, emptyList()))
+                }
                 showAddSection = false
             },
             onDismiss = { showAddSection = false },
@@ -408,11 +495,254 @@ internal fun ExpenseEditor(
     }
 }
 
+// ---- Account tabs --------------------------------------------------------------
+
+@Composable
+private fun AccountTabs(
+    accounts: List<ExpAccount>,
+    selectedIndex: Int,
+    accentFor: (ExpAccount) -> Color,
+    showAdd: Boolean,
+    onSelect: (Int) -> Unit,
+    onAdd: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        accounts.forEachIndexed { index, account ->
+            AccountChip(
+                name = account.name.ifBlank { "Account" },
+                accent = accentFor(account),
+                selected = index == selectedIndex,
+                onClick = { onSelect(index) },
+            )
+        }
+        if (showAdd) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.Add,
+                    contentDescription = "Add account",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountChip(name: String, accent: Color, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) accent else MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(9.dp)
+                .clip(CircleShape)
+                .background(if (selected) Color.White else accent),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) Color.White else MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun EmptyAccounts(readOnly: Boolean, onAdd: () -> Unit) {
+    ExpenseCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Rounded.AccountBalance,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "No accounts yet",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = if (readOnly) "This tracker has no accounts." else "Add an account to start tracking balances.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (!readOnly) {
+            Spacer(Modifier.height(14.dp))
+            AddSectionButton(onClick = onAdd, label = "Add account")
+        }
+    }
+}
+
+// ---- Account header ------------------------------------------------------------
+
+@Composable
+private fun AccountHeaderCard(
+    account: ExpAccount,
+    accent: Color,
+    readOnly: Boolean,
+    canTransfer: Boolean,
+    onBalance: (Double) -> Unit,
+    onSend: () -> Unit,
+    onTransfer: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onRenameText: (String) -> Unit,
+) {
+    val deductible = account.deductible()
+    val available = account.balance - deductible
+    ExpenseCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(accent),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(sectionIcon(account.iconKey), contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            SectionNameField(value = account.name, onChange = onRenameText, placeholder = "Account name", modifier = Modifier.weight(1f))
+            if (!readOnly) AccountMenu(onEdit = onEdit, onDelete = onDelete)
+        }
+
+        if (account.tags.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                account.tags.forEach { tag -> TagChip(tag = tag, accent = accent) }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = "Balance",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(4.dp))
+        MoneyField(
+            value = account.balance,
+            onChange = onBalance,
+            textStyle = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+        )
+        if (deductible > 0.0) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Available after allocations  " + formatMoney(available),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (available >= 0) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+            )
+        }
+
+        if (!readOnly) {
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PillButton(icon = Icons.Rounded.Payments, label = "Send money", accent = accent, onClick = onSend)
+                if (canTransfer) {
+                    PillButton(icon = Icons.Rounded.SwapHoriz, label = "Transfer", accent = accent, onClick = onTransfer)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PillButton(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(accent.copy(alpha = 0.14f))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = accent)
+    }
+}
+
+@Composable
+private fun TagChip(tag: String, accent: Color) {
+    Text(
+        text = tag,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = accent,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(accent.copy(alpha = 0.12f))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    )
+}
+
+@Composable
+private fun AccountMenu(onEdit: () -> Unit, onDelete: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .clickable { open = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.MoreVert, contentDescription = "Account options", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text("Edit account") },
+                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                onClick = { open = false; onEdit() },
+            )
+            DropdownMenuItem(
+                text = { Text("Delete account") },
+                leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+                onClick = { open = false; onDelete() },
+            )
+        }
+    }
+}
+
+// ---- Section card --------------------------------------------------------------
+
 @Composable
 private fun SectionCard(
-    section: ExpenseSection,
+    section: ExpSection,
     accent: Color,
     onRename: (String) -> Unit,
+    onToggleDeduct: () -> Unit,
     onAddItem: () -> Unit,
     onItemName: (String, String) -> Unit,
     onItemAmount: (String, Double) -> Unit,
@@ -420,61 +750,71 @@ private fun SectionCard(
     onRemoveSection: () -> Unit,
 ) {
     val total = section.items.sumOf { it.amount }
+    val readOnly = LocalReadOnly.current
     ExpenseCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(sectionIcon(section.iconKey), contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
-            SectionNameField(
-                value = section.name,
-                onChange = onRename,
-                modifier = Modifier.weight(1f),
-            )
+            SectionNameField(value = section.name, onChange = onRename, placeholder = "Section name", modifier = Modifier.weight(1f))
             Spacer(Modifier.width(6.dp))
-            Text(
-                text = formatMoney(total),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = accent,
-            )
-            SectionMenu(onRemove = onRemoveSection)
+            Text(text = formatMoney(total), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = accent)
+            if (!readOnly) SectionMenu(onRemove = onRemoveSection)
         }
-        if (section.items.isNotEmpty()) Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
+        DeductToggle(deduct = section.deductFromBalance, enabled = !readOnly, onToggle = onToggleDeduct)
+
+        if (section.items.isNotEmpty()) Spacer(Modifier.height(6.dp))
         section.items.forEach { item ->
             key(item.id) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PlainField(
-                        value = item.name,
-                        placeholder = "Name",
-                        onChange = { onItemName(item.id, it) },
-                        modifier = Modifier.weight(1f),
-                    )
+                    PlainField(value = item.name, placeholder = "Name", onChange = { onItemName(item.id, it) }, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(10.dp))
-                    MoneyField(
-                        value = item.amount,
-                        onChange = { onItemAmount(item.id, it) },
-                        textStyle = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.width(110.dp),
-                    )
-                    DeleteDot { onDeleteItem(item.id) }
+                    MoneyField(value = item.amount, onChange = { onItemAmount(item.id, it) }, textStyle = MaterialTheme.typography.bodyLarge, modifier = Modifier.width(110.dp))
+                    if (!readOnly) DeleteDot { onDeleteItem(item.id) }
                 }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        AddRow(onAddItem)
+        if (!readOnly) {
+            Spacer(Modifier.height(6.dp))
+            AddRow(onAddItem)
+        }
     }
 }
 
 @Composable
-private fun SectionNameField(value: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun DeductToggle(deduct: Boolean, enabled: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(enabled = enabled, onClick = onToggle)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (deduct) Icons.Rounded.Check else Icons.Rounded.Close,
+            contentDescription = null,
+            tint = if (deduct) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(15.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (deduct) "Spends from balance" else "Tracked separately",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun SectionNameField(value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
     Box(modifier) {
         if (value.isEmpty()) {
             Text(
-                text = "Section name",
+                text = placeholder,
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
@@ -484,10 +824,7 @@ private fun SectionNameField(value: String, onChange: (String) -> Unit, modifier
             value = value,
             onValueChange = onChange,
             singleLine = true,
-            textStyle = MaterialTheme.typography.titleMedium.copy(
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Bold,
-            ),
+            textStyle = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             readOnly = LocalReadOnly.current,
             modifier = Modifier.fillMaxWidth(),
@@ -500,39 +837,26 @@ private fun SectionMenu(onRemove: () -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         Box(
-            modifier = Modifier
-                .size(30.dp)
-                .clip(CircleShape)
-                .clickable(enabled = !LocalReadOnly.current) { open = true },
+            modifier = Modifier.size(30.dp).clip(CircleShape).clickable { open = true },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                Icons.Rounded.MoreVert,
-                contentDescription = "Section options",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp),
-            )
+            Icon(Icons.Rounded.MoreVert, contentDescription = "Section options", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
                 text = { Text("Remove section") },
                 leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
-                onClick = {
-                    open = false
-                    onRemove()
-                },
+                onClick = { open = false; onRemove() },
             )
         }
     }
 }
 
 @Composable
-private fun AddSectionButton(onClick: () -> Unit) {
+private fun AddSectionButton(onClick: () -> Unit, label: String = "Add section") {
     val neu = LocalNeuColors.current
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -541,44 +865,29 @@ private fun AddSectionButton(onClick: () -> Unit) {
                 .neumorphicRaised(26.dp, neu, elevation = 6.dp)
                 .clip(RoundedCornerShape(26.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .clickable(enabled = !LocalReadOnly.current, onClick = onClick)
+                .clickable(onClick = onClick)
                 .padding(start = 8.dp, end = 22.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary),
+                modifier = Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    Icons.Rounded.Add,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimary,
-                    modifier = Modifier.size(22.dp),
-                )
+                Icon(Icons.Rounded.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(22.dp))
             }
             Spacer(Modifier.width(12.dp))
-            Text(
-                text = "Add section",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary,
-            )
+            Text(label, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
 
-@Composable
-private fun AddSectionDialog(
-    onAdd: (name: String, iconKey: String, kind: SectionKind) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    var name by remember { mutableStateOf("") }
-    var iconKey by remember { mutableStateOf("other") }
-    var kind by remember { mutableStateOf(SectionKind.ALLOCATION) }
+// ---- Dialogs -------------------------------------------------------------------
 
+@Composable
+private fun AddSectionDialog(onAdd: (name: String, iconKey: String, deduct: Boolean) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var iconKey by remember { mutableStateOf("savings") }
+    var deduct by remember { mutableStateOf(true) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New section") },
@@ -586,54 +895,208 @@ private fun AddSectionDialog(
             Column {
                 DialogField(value = name, onChange = { name = it }, placeholder = "Section name")
                 Spacer(Modifier.height(16.dp))
-                Text(
-                    text = "Icon",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text("Icon", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    sectionIconOptions.forEach { (key, icon) ->
-                        IconChoice(icon = icon, selected = key == iconKey, onClick = { iconKey = key })
-                    }
-                }
+                IconPickerRow(selected = iconKey, onSelect = { iconKey = it })
                 Spacer(Modifier.height(16.dp))
-                Text(
-                    text = "Type",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    KindChip("Spending", kind == SectionKind.ALLOCATION) { kind = SectionKind.ALLOCATION }
-                    KindChip("Balances", kind == SectionKind.ACCOUNT) { kind = SectionKind.ACCOUNT }
+                    ChoiceChip("Spends from balance", deduct) { deduct = true }
+                    ChoiceChip("Track separately", !deduct) { deduct = false }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = if (kind == SectionKind.ALLOCATION) {
-                        "Counts against your income and shows in the allocation bar (like expenses or savings)."
-                    } else {
-                        "Just tracks balances (like accounts) - it doesn't change what's unallocated."
-                    },
+                    text = if (deduct) "Its total is subtracted from this account's available balance." else "Just tracked here - it doesn't change the balance.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
-        confirmButton = {
-            TextButton(onClick = { if (name.isNotBlank()) onAdd(name.trim(), iconKey, kind) }) {
-                Text("Add", fontWeight = FontWeight.SemiBold)
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onAdd(name.trim(), iconKey, deduct) }) { Text("Add", fontWeight = FontWeight.SemiBold) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun AccountDialog(
+    title: String,
+    confirmLabel: String,
+    onConfirm: (name: String, iconKey: String, colorArgb: Int, tags: List<String>) -> Unit,
+    onDismiss: () -> Unit,
+    initialName: String = "",
+    initialIcon: String = "account",
+    initialColor: Int = 0,
+    initialTags: List<String> = emptyList(),
+) {
+    var name by remember { mutableStateOf(initialName) }
+    var iconKey by remember { mutableStateOf(initialIcon) }
+    var color by remember { mutableStateOf(initialColor) }
+    var tags by remember { mutableStateOf(initialTags) }
+    var customTag by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                DialogField(value = name, onChange = { name = it }, placeholder = "Account name")
+                Spacer(Modifier.height(16.dp))
+                Text("Icon", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                IconPickerRow(selected = iconKey, onSelect = { iconKey = it })
+                Spacer(Modifier.height(16.dp))
+                Text("Colour", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    accountColorChoices.forEach { c -> ColorSwatch(colorArgb = c, selected = c == color, onClick = { color = c }) }
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("Tags", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    (presetTags + tags.filter { it !in presetTags }).distinct().forEach { tag ->
+                        ChoiceChip(label = tag, selected = tag in tags) {
+                            tags = if (tag in tags) tags - tag else tags + tag
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { DialogField(value = customTag, onChange = { customTag = it }, placeholder = "Add a custom tag") }
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(
+                        onClick = {
+                            val t = customTag.trim()
+                            if (t.isNotBlank() && t !in tags) tags = tags + t
+                            customTag = ""
+                        },
+                        enabled = customTag.isNotBlank(),
+                    ) { Text("Add") }
+                }
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
+        confirmButton = { TextButton(onClick = { if (name.isNotBlank()) onConfirm(name.trim(), iconKey, color, tags) }) { Text(confirmLabel, fontWeight = FontWeight.SemiBold) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+@Composable
+private fun SendMoneyDialog(accountName: String, onDone: (delta: Double) -> Unit, onDismiss: () -> Unit) {
+    var add by remember { mutableStateOf(true) }
+    var amountText by remember { mutableStateOf("") }
+    val amount = amountText.toDoubleOrNull() ?: 0.0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Send money") },
+        text = {
+            Column {
+                Text("Add to or take from $accountName.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ChoiceChip("Add", add) { add = true }
+                    ChoiceChip("Subtract", !add) { add = false }
+                }
+                Spacer(Modifier.height(12.dp))
+                NumberDialogField(value = amountText, onChange = { amountText = it }, placeholder = "Amount")
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { if (amount > 0.0) { onDone(if (add) amount else -amount); onDismiss() } },
+                enabled = amount > 0.0,
+            ) { Text("Done", fontWeight = FontWeight.SemiBold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun TransferDialog(fromName: String, others: List<ExpAccount>, onTransfer: (targetId: String, amount: Double) -> Unit, onDismiss: () -> Unit) {
+    var targetId by remember { mutableStateOf(others.firstOrNull()?.id) }
+    var amountText by remember { mutableStateOf("") }
+    val amount = amountText.toDoubleOrNull() ?: 0.0
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Transfer") },
+        text = {
+            Column {
+                Text("Move money from $fromName to another account.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                Text("To", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    others.forEach { acc ->
+                        ChoiceChip(label = acc.name.ifBlank { "Account" }, selected = acc.id == targetId) { targetId = acc.id }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                NumberDialogField(value = amountText, onChange = { amountText = it }, placeholder = "Amount")
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val t = targetId
+                    if (t != null && amount > 0.0) { onTransfer(t, amount); onDismiss() }
+                },
+                enabled = targetId != null && amount > 0.0,
+            ) { Text("Transfer", fontWeight = FontWeight.SemiBold) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun IconPickerRow(selected: String, onSelect: (String) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        sectionIconOptions.forEach { (key, icon) -> IconChoice(icon = icon, selected = key == selected, onClick = { onSelect(key) }) }
+    }
+}
+
+@Composable
+private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun ColorSwatch(colorArgb: Int, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .border(
+                width = 2.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = CircleShape,
+            )
+            .padding(4.dp)
+            .clip(CircleShape)
+            .background(if (colorArgb != 0) Color(colorArgb) else MaterialTheme.colorScheme.primary),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) Icon(Icons.Rounded.Check, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+    }
 }
 
 @Composable
@@ -646,11 +1109,7 @@ private fun DialogField(value: String, onChange: (String) -> Unit, placeholder: 
             .padding(horizontal = 14.dp, vertical = 12.dp),
     ) {
         if (value.isEmpty()) {
-            Text(
-                text = placeholder,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
+            Text(text = placeholder, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
         }
         BasicTextField(
             value = value,
@@ -664,15 +1123,36 @@ private fun DialogField(value: String, onChange: (String) -> Unit, placeholder: 
 }
 
 @Composable
+private fun NumberDialogField(value: String, onChange: (String) -> Unit, placeholder: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(text = placeholder, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = { raw -> onChange(raw.filter { it.isDigit() || it == '.' }) },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
 private fun IconChoice(icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .size(40.dp)
             .clip(CircleShape)
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-            )
+            .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -685,23 +1165,7 @@ private fun IconChoice(icon: ImageVector, selected: Boolean, onClick: () -> Unit
     }
 }
 
-@Composable
-private fun KindChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        text = label,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.surfaceVariant,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-    )
-}
+// ---- Shared building blocks ----------------------------------------------------
 
 @Composable
 private fun ExpenseCard(content: @Composable () -> Unit) {
@@ -719,122 +1183,35 @@ private fun ExpenseCard(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun AllocationBar(income: Double, allocated: Double, segments: List<Pair<Double, Color>>) {
-    val denom = maxOf(income, allocated)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(14.dp)
-            .clip(RoundedCornerShape(50))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        if (denom > 0.0) {
-            segments.forEach { (amount, color) ->
-                val fraction = (amount / denom).toFloat()
-                if (fraction > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .weight(fraction)
-                            .fillMaxHeight()
-                            .background(color),
-                    )
-                }
-            }
-            val remainingFraction = ((income - allocated) / denom).toFloat()
-            if (remainingFraction > 0f) {
-                Box(modifier = Modifier.weight(remainingFraction).fillMaxHeight())
-            }
-        }
-    }
-}
-
-@Composable
-private fun LegendRow(label: String, amount: Double, color: Color) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(color),
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f),
-        )
-        Text(
-            text = formatMoney(amount),
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    }
-}
-
-@Composable
 private fun AddRow(onAdd: () -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = !LocalReadOnly.current, onClick = onAdd)
+            .clickable(onClick = onAdd)
             .padding(vertical = 6.dp, horizontal = 2.dp),
     ) {
-        Icon(
-            Icons.Rounded.Add,
-            contentDescription = "Add",
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(20.dp),
-        )
+        Icon(Icons.Rounded.Add, contentDescription = "Add", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(8.dp))
-        Text(
-            text = "Add",
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary,
-        )
+        Text("Add", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
     }
 }
 
 @Composable
 private fun DeleteDot(onClick: () -> Unit) {
     Box(
-        modifier = Modifier
-            .size(28.dp)
-            .clip(CircleShape)
-            .clickable(enabled = !LocalReadOnly.current, onClick = onClick),
+        modifier = Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            Icons.Rounded.Close,
-            contentDescription = "Remove",
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(16.dp),
-        )
+        Icon(Icons.Rounded.Close, contentDescription = "Remove", tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
     }
 }
 
 @Composable
-private fun PlainField(
-    value: String,
-    placeholder: String,
-    onChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
+private fun PlainField(value: String, placeholder: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
     Box(modifier = modifier) {
         if (value.isEmpty()) {
-            Text(
-                text = placeholder,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-            )
+            Text(text = placeholder, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f))
         }
         BasicTextField(
             value = value,
@@ -849,19 +1226,15 @@ private fun PlainField(
 }
 
 @Composable
-private fun MoneyField(
-    value: Double,
-    onChange: (Double) -> Unit,
-    textStyle: androidx.compose.ui.text.TextStyle,
-    modifier: Modifier = Modifier,
-) {
+private fun MoneyField(value: Double, onChange: (Double) -> Unit, textStyle: androidx.compose.ui.text.TextStyle, modifier: Modifier = Modifier) {
     var text by remember { mutableStateOf(plainAmount(value)) }
+    LaunchedEffect(value) {
+        // Keep the field in sync when the balance changes from outside (send / transfer).
+        val external = plainAmount(value)
+        if ((text.toDoubleOrNull() ?: 0.0) != value) text = external
+    }
     Row(modifier = modifier, verticalAlignment = Alignment.Bottom) {
-        Text(
-            text = "₹",
-            style = textStyle,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Text(text = "₹", style = textStyle, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(2.dp))
         Box(modifier = Modifier.weight(1f, fill = false)) {
             if (text.isEmpty()) {

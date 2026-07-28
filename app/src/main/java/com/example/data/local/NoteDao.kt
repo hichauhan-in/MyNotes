@@ -101,6 +101,9 @@ interface FolderDao {
     @Query("UPDATE folders SET name = :name WHERE id = :id")
     suspend fun renameFolder(id: String, name: String)
 
+    @Query("UPDATE folders SET colorArgb = :colorArgb WHERE id = :id")
+    suspend fun setFolderColor(id: String, colorArgb: Int)
+
     @Query("UPDATE folders SET parentId = :parentId WHERE id = :id")
     suspend fun setFolderParent(id: String, parentId: String?)
 

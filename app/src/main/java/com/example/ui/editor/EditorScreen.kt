@@ -75,6 +75,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TextSnippet
@@ -170,6 +171,9 @@ import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
 import com.example.data.export.ShareIO
+import com.example.data.sync.DriveAuth
+import com.example.data.sync.DriveShare
+import com.google.android.gms.auth.api.identity.Identity
 import com.example.domain.model.AttachmentKind
 import com.example.domain.model.AttachmentMarkup
 import com.example.domain.model.Checklist as ChecklistUtil
@@ -207,6 +211,7 @@ fun EditorScreen(
     LaunchedEffect(Unit) { viewModel.load(noteId, template, folderId, templateId) }
     val state by viewModel.state.collectAsStateWithLifecycle()
     val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
+    val driveConnected by viewModel.driveConnected.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
     // Existing notes open read-only; new notes and template drafts open ready to edit.
@@ -520,6 +525,32 @@ fun EditorScreen(
                 android.widget.Toast.makeText(context, "Couldn't share", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    // Upload a readable copy to Drive and share an "anyone with the link can view" URL.
+    fun shareDriveLink() {
+        android.widget.Toast.makeText(context, "Creating share link…", android.widget.Toast.LENGTH_SHORT).show()
+        Identity.getAuthorizationClient(context)
+            .authorize(DriveAuth.request())
+            .addOnSuccessListener { result ->
+                val token = result.accessToken
+                if (!result.hasResolution() && token != null) {
+                    val note = buildExportNote()
+                    scope.launch {
+                        val link = DriveShare.createLink(token, note)
+                        if (link != null) {
+                            ShareIO.shareText(context, note.title.ifBlank { "Note" }, link)
+                        } else {
+                            android.widget.Toast.makeText(context, "Couldn't create link", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                } else {
+                    android.widget.Toast.makeText(context, "Connect Google Drive in Settings first", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            .addOnFailureListener {
+                android.widget.Toast.makeText(context, "Couldn't reach Google Drive", android.widget.Toast.LENGTH_SHORT).show()
+            }
     }
 
     // Seed the editable fields once the note has been loaded / created. Heavy parsing (a giant
@@ -868,6 +899,7 @@ fun EditorScreen(
             onShareText = { showShareSheet = false; shareNoteText() },
             onSharePdf = { showShareSheet = false; shareNoteFile(ExportFormat.PDF) },
             onShareMarkdown = { showShareSheet = false; shareNoteFile(ExportFormat.MD) },
+            onShareDriveLink = if (driveConnected) ({ showShareSheet = false; shareDriveLink() }) else null,
             onDismiss = { showShareSheet = false },
         )
     }
@@ -1790,6 +1822,7 @@ private fun ShareOptionsSheet(
     onSharePdf: () -> Unit,
     onShareMarkdown: () -> Unit,
     onDismiss: () -> Unit,
+    onShareDriveLink: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(
@@ -1819,6 +1852,9 @@ private fun ShareOptionsSheet(
             SheetOptionRow(Icons.Rounded.Share, "Share as text", "Send the note's text to another app", onShareText)
             SheetOptionRow(Icons.Rounded.PictureAsPdf, "Share as PDF", "Attach a PDF copy", onSharePdf)
             SheetOptionRow(Icons.Rounded.Description, "Share as Markdown", "Attach a .md copy", onShareMarkdown)
+            if (onShareDriveLink != null) {
+                SheetOptionRow(Icons.Rounded.Link, "Share a link", "Anyone with the link can view (via Google Drive)", onShareDriveLink)
+            }
         }
     }
 }

@@ -7,6 +7,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -75,7 +81,10 @@ import androidx.compose.material.icons.rounded.Brush
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.CloudOff
 import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.CurrencyRupee
 import androidx.compose.material.icons.rounded.Delete
@@ -120,6 +129,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -140,6 +150,10 @@ import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
 import com.example.data.export.ShareIO
+import com.example.data.sync.DriveAuth
+import com.example.data.sync.DriveShare
+import com.example.data.sync.SyncStatus
+import com.google.android.gms.auth.api.identity.Identity
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Folder
 import com.example.domain.model.Note
@@ -181,6 +195,8 @@ fun HomeScreen(
     val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
     val allNotesForExport by viewModel.notesForExport.collectAsStateWithLifecycle()
     val showSyncPrompt by viewModel.showSyncPrompt.collectAsStateWithLifecycle()
+    val syncEnabled by viewModel.syncEnabled.collectAsStateWithLifecycle()
+    val driveConnected by viewModel.driveConnected.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var fabExpanded by remember { mutableStateOf(false) }
@@ -327,6 +343,28 @@ fun HomeScreen(
         }
     }
 
+    // Upload a readable copy of a note to Drive and share an "anyone with the link" URL.
+    fun shareNoteDriveLink(note: Note) {
+        android.widget.Toast.makeText(context, "Creating share link…", android.widget.Toast.LENGTH_SHORT).show()
+        Identity.getAuthorizationClient(context)
+            .authorize(DriveAuth.request())
+            .addOnSuccessListener { result ->
+                val token = result.accessToken
+                if (!result.hasResolution() && token != null) {
+                    scope.launch {
+                        val link = DriveShare.createLink(token, note)
+                        if (link != null) ShareIO.shareText(context, note.title.ifBlank { "Note" }, link)
+                        else android.widget.Toast.makeText(context, "Couldn't create link", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    android.widget.Toast.makeText(context, "Connect Google Drive in Settings first", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+            .addOnFailureListener {
+                android.widget.Toast.makeText(context, "Couldn't reach Google Drive", android.widget.Toast.LENGTH_SHORT).show()
+            }
+    }
+
     // Shared across the empty and populated layouts so the filter row keeps its horizontal scroll
     // position when a tab switches between empty and full (e.g. selecting Trash after deleting).
     val filterScrollState = rememberScrollState()
@@ -351,6 +389,7 @@ fun HomeScreen(
                 onBookOptions = { state.currentBook?.let { bookActionsFor = it } },
                 onCoffee = { showCoffeeSheet = true },
                 onOpenSettings = onOpenSettings,
+                onSyncClick = if (syncEnabled) ({ viewModel.triggerSync(context) }) else null,
             )
         } else {
         LazyVerticalStaggeredGrid(
@@ -392,6 +431,7 @@ fun HomeScreen(
                         noteCount = state.totalNotes,
                         onCoffee = { showCoffeeSheet = true },
                         onOpenSettings = onOpenSettings,
+                        onSyncClick = if (syncEnabled) ({ viewModel.triggerSync(context) }) else null,
                     )
                 }
             }
@@ -507,6 +547,7 @@ fun HomeScreen(
                         folderName = foldersById[note.folderId]?.name,
                         selected = note.id in selectedIds,
                         selectionMode = selectionMode,
+                        cloudConnected = syncEnabled,
                         onOpen = { onNoteClick(note.id) },
                         onToggleSelect = { viewModel.toggleSelection(note.id) },
                         onMore = { actionNote = note },
@@ -530,6 +571,7 @@ fun HomeScreen(
                         folderName = foldersById[note.folderId]?.name,
                         selected = note.id in selectedIds,
                         selectionMode = selectionMode,
+                        cloudConnected = syncEnabled,
                         onOpen = { onNoteClick(note.id) },
                         onToggleSelect = { viewModel.toggleSelection(note.id) },
                         onMore = { actionNote = note },
@@ -731,8 +773,8 @@ fun HomeScreen(
             title = "New book",
             initial = "",
             confirmLabel = "Create",
-            onConfirm = {
-                viewModel.createBook(it)
+            onConfirm = { name, color ->
+                viewModel.createBook(name, color)
                 showBookCreator = false
             },
             onDismiss = { showBookCreator = false },
@@ -741,11 +783,13 @@ fun HomeScreen(
 
     renameBookFor?.let { book ->
         BookNameDialog(
-            title = "Rename book",
+            title = "Edit book",
             initial = book.name,
+            initialColor = book.colorArgb,
             confirmLabel = "Save",
-            onConfirm = {
-                viewModel.renameBook(book.id, it)
+            onConfirm = { name, color ->
+                viewModel.renameBook(book.id, name)
+                viewModel.setBookColor(book.id, color)
                 renameBookFor = null
             },
             onDismiss = { renameBookFor = null },
@@ -843,6 +887,7 @@ fun HomeScreen(
             onShareText = { noteShareFor = null; shareNoteText(note) },
             onSharePdf = { noteShareFor = null; shareNoteFile(note, ExportFormat.PDF) },
             onShareMarkdown = { noteShareFor = null; shareNoteFile(note, ExportFormat.MD) },
+            onShareDriveLink = if (driveConnected) ({ noteShareFor = null; shareNoteDriveLink(note) }) else null,
             onDismiss = { noteShareFor = null },
         )
     }
@@ -921,6 +966,7 @@ private fun EmptyHomeContent(
     onBookOptions: () -> Unit,
     onCoffee: () -> Unit,
     onOpenSettings: () -> Unit,
+    onSyncClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
@@ -932,7 +978,7 @@ private fun EmptyHomeContent(
                 bottom = insets.calculateBottomPadding() + 24.dp,
             ),
     ) {
-        HomeHeader(noteCount = noteCount, onCoffee = onCoffee, onOpenSettings = onOpenSettings)
+        HomeHeader(noteCount = noteCount, onCoffee = onCoffee, onOpenSettings = onOpenSettings, onSyncClick = onSyncClick)
         // These gaps intentionally match the populated grid's spacing (its verticalItemSpacing adds
         // ~14dp between the header/search/filter rows) so the top bar looks identical whether the
         // tab is empty or full - never "compact" on an empty tab.
@@ -967,6 +1013,7 @@ private fun HomeHeader(
     noteCount: Int,
     onCoffee: () -> Unit,
     onOpenSettings: () -> Unit,
+    onSyncClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -975,12 +1022,15 @@ private fun HomeHeader(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(
-                text = "MyNotes+",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "MyNotes",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                SyncPlusBadge(onSyncClick = onSyncClick)
+            }
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
@@ -1009,6 +1059,68 @@ private fun HomeHeader(
             onClick = onOpenSettings,
         )
     }
+}
+
+/**
+ * The "+" from the MyNotes+ wordmark, repurposed as a live sync control. It's purple at rest;
+ * while a sync runs it spins and gently shifts colour. Tapping it triggers a manual sync (only
+ * when [onSyncClick] is provided, i.e. Drive is connected on this device).
+ */
+@Composable
+private fun SyncPlusBadge(onSyncClick: (() -> Unit)?) {
+    val syncing by SyncStatus.syncing.collectAsStateWithLifecycle()
+    val purple = MaterialTheme.colorScheme.primary
+    val accent = MaterialTheme.colorScheme.tertiary
+    val transition = rememberInfiniteTransition(label = "syncPlus")
+    val angle by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(tween(1100, easing = LinearEasing)),
+        label = "angle",
+    )
+    val colorT by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(750, easing = LinearEasing), repeatMode = RepeatMode.Reverse),
+        label = "tint",
+    )
+    val tint = if (syncing) lerp(purple, accent, colorT) else purple
+    Box(
+        modifier = Modifier
+            .padding(start = 2.dp)
+            .size(32.dp)
+            .clip(CircleShape)
+            .then(if (onSyncClick != null) Modifier.clickable(onClick = onSyncClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Add,
+            contentDescription = if (onSyncClick != null) "Sync now" else null,
+            tint = tint,
+            modifier = Modifier
+                .size(28.dp)
+                .then(if (syncing) Modifier.rotate(angle) else Modifier),
+        )
+    }
+}
+
+/**
+ * Tiny per-note cloud state: a filled cloud-check (theme accent) when Drive sync is connected on
+ * this device, or a muted cloud-off when the note lives only on-device. Deliberately understated.
+ */
+@Composable
+private fun SyncDot(connected: Boolean) {
+    Icon(
+        imageVector = if (connected) Icons.Rounded.CloudDone else Icons.Rounded.CloudOff,
+        contentDescription = if (connected) "Synced to Drive" else "On this device only",
+        tint = if (connected) {
+            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.85f)
+        } else {
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+        },
+        modifier = Modifier.size(14.dp),
+    )
+    Spacer(Modifier.width(6.dp))
 }
 
 @Composable
@@ -1415,6 +1527,7 @@ private fun NoteCard(
     folderName: String? = null,
     selected: Boolean,
     selectionMode: Boolean,
+    cloudConnected: Boolean = false,
     onOpen: () -> Unit,
     onToggleSelect: () -> Unit,
     onMore: () -> Unit,
@@ -1560,6 +1673,7 @@ private fun NoteCard(
                                 }
                             }
                         }
+                        SyncDot(connected = cloudConnected)
                         if (note.isFavorite) {
                             Icon(
                                 imageVector = Icons.Rounded.Favorite,
@@ -2142,11 +2256,15 @@ private fun BookCard(
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val bookColor = book.folder.colorArgb.takeIf { it != 0 }?.let { Color(it) }
                     Box(
                         modifier = Modifier
                             .size(40.dp)
                             .clip(RoundedCornerShape(12.dp))
-                            .background(brandGradientHorizontal()),
+                            .then(
+                                if (bookColor != null) Modifier.background(bookColor)
+                                else Modifier.background(brandGradientHorizontal()),
+                            ),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -2277,26 +2395,50 @@ private fun BookNameDialog(
     title: String,
     initial: String,
     confirmLabel: String,
-    onConfirm: (String) -> Unit,
+    onConfirm: (String, Int) -> Unit,
     onDismiss: () -> Unit,
+    initialColor: Int = 0,
 ) {
     var name by remember { mutableStateOf(initial) }
+    var color by remember { mutableStateOf(initialColor) }
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
             Icon(
                 imageVector = Icons.Rounded.CreateNewFolder,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                tint = if (color != 0) Color(color) else MaterialTheme.colorScheme.primary,
             )
         },
         title = { Text(title) },
         text = {
-            TemplateTextField(name, { name = it }, "Book name", singleLine = true)
+            Column {
+                TemplateTextField(name, { name = it }, "Book name", singleLine = true)
+                Spacer(Modifier.height(18.dp))
+                Text(
+                    text = "Colour",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                ) {
+                    bookColorChoices.forEach { choice ->
+                        BookColorSwatch(
+                            colorArgb = choice,
+                            selected = choice == color,
+                            onClick = { color = choice },
+                        )
+                    }
+                }
+            }
         },
         confirmButton = {
             TextButton(
-                onClick = { if (name.isNotBlank()) onConfirm(name.trim()) },
+                onClick = { if (name.isNotBlank()) onConfirm(name.trim(), color) },
                 enabled = name.isNotBlank(),
             ) { Text(confirmLabel) }
         },
@@ -2304,6 +2446,51 @@ private fun BookNameDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+/** Colour choices for books; 0 = the default brand-gradient look. */
+private val bookColorChoices = listOf(
+    0,
+    0xFF7E57C2.toInt(),
+    0xFF5C6BC0.toInt(),
+    0xFF42A5F5.toInt(),
+    0xFF26A69A.toInt(),
+    0xFF66BB6A.toInt(),
+    0xFFFFCA28.toInt(),
+    0xFFEF6C00.toInt(),
+    0xFFEC407A.toInt(),
+    0xFFEF5350.toInt(),
+)
+
+@Composable
+private fun BookColorSwatch(colorArgb: Int, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(38.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .border(
+                width = 2.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = CircleShape,
+            )
+            .padding(4.dp)
+            .clip(CircleShape)
+            .then(
+                if (colorArgb != 0) Modifier.background(Color(colorArgb))
+                else Modifier.background(brandGradientHorizontal()),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+    }
 }
 
 private data class FolderRow(val folder: Folder, val depth: Int)
@@ -2528,6 +2715,7 @@ private fun NoteShareSheet(
     onSharePdf: () -> Unit,
     onShareMarkdown: () -> Unit,
     onDismiss: () -> Unit,
+    onShareDriveLink: (() -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(
@@ -2557,6 +2745,9 @@ private fun NoteShareSheet(
             SheetAction(Icons.Rounded.Share, "Share as text") { onShareText() }
             SheetAction(Icons.Rounded.PictureAsPdf, "Share as PDF") { onSharePdf() }
             SheetAction(Icons.Rounded.Description, "Share as Markdown") { onShareMarkdown() }
+            if (onShareDriveLink != null) {
+                SheetAction(Icons.Rounded.Link, "Share a link") { onShareDriveLink() }
+            }
         }
     }
 }

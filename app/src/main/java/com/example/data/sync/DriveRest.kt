@@ -22,15 +22,29 @@ data class RemoteNoteMeta(val fileId: String, val noteId: String, val updatedAt:
 object DriveRest {
 
     private val client = OkHttpClient.Builder()
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
         .callTimeout(30, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     /**
      * Returns the email of the account the [accessToken] belongs to (via Drive's `about` endpoint),
      * or null on any failure. A successful non-null result confirms the token is valid and the app
-     * is authorised for Drive.
+     * is authorised for Drive. Retries a couple of times to ride out a transient network hiccup or
+     * a token that's still propagating right after (re)connecting.
      */
-    fun fetchAccountEmail(accessToken: String): String? = runCatching {
+    fun fetchAccountEmail(accessToken: String): String? {
+        repeat(3) { attempt ->
+            val email = fetchAccountEmailOnce(accessToken)
+            if (email != null) return email
+            if (attempt < 2) Thread.sleep(400)
+        }
+        return null
+    }
+
+    private fun fetchAccountEmailOnce(accessToken: String): String? = runCatching {
         val request = Request.Builder()
             .url("https://www.googleapis.com/drive/v3/about?fields=user(emailAddress,displayName)")
             .header("Authorization", "Bearer $accessToken")
@@ -47,6 +61,7 @@ object DriveRest {
 
     private val jsonMedia = "application/json; charset=UTF-8".toMediaType()
     private val textMedia = "text/plain; charset=UTF-8".toMediaType()
+    private val htmlMedia = "text/html; charset=UTF-8".toMediaType()
     private const val FOLDER_MIME = "application/vnd.google-apps.folder"
 
     /** Finds the visible "MyNotes" [name] folder, creating it if absent. Returns its id or null. */
@@ -77,6 +92,28 @@ object DriveRest {
             .addQueryParameter("pageSize", "1")
             .build()
         return firstFileId(exec(authGet(accessToken, url)))
+    }
+
+    /**
+     * Whether the appDataFolder file [name] exists: true = present, false = confirmed absent, and
+     * **null = couldn't determine** (network/HTTP failure). Callers MUST treat null as "unknown"
+     * and never as "absent" - mistaking a transient error for "no key envelope" would prompt a new
+     * passphrase and overwrite the real one, orphaning existing notes.
+     */
+    fun appDataFileExists(accessToken: String, name: String): Boolean? {
+        val url = "https://www.googleapis.com/drive/v3/files".toHttpUrl().newBuilder()
+            .addQueryParameter("q", "name = '${esc(name)}' and trashed = false")
+            .addQueryParameter("spaces", "appDataFolder")
+            .addQueryParameter("fields", "files(id)")
+            .addQueryParameter("pageSize", "1")
+            .build()
+        return try {
+            client.newCall(authGet(accessToken, url)).execute().use { r ->
+                if (r.isSuccessful) firstFileId(r.body?.string()) != null else null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**
@@ -209,6 +246,49 @@ object DriveRest {
         val builder = Request.Builder().url(url).header("Authorization", "Bearer $accessToken")
         val request = (if (patch) builder.patch(multipart) else builder.post(multipart)).build()
         return exec(request)?.let { runCatching { JSONObject(it).optString("id").ifBlank { null } }.getOrNull() }
+    }
+
+    // ---- Shareable link (plaintext copy as a Google Doc) ------------------------
+
+    /**
+     * Uploads [html] as a converted **Google Doc** named [name] in [folderId] and returns its id.
+     * Unlike the encrypted sync blobs, this is a readable copy the user has chosen to share.
+     */
+    fun uploadSharedDoc(accessToken: String, folderId: String, name: String, html: String): String? {
+        val meta = JSONObject()
+            .put("name", name)
+            .put("parents", JSONArray().put(folderId))
+            .put("mimeType", "application/vnd.google-apps.document")
+        val multipart = MultipartBody.Builder()
+            .setType("multipart/related".toMediaType())
+            .addPart(meta.toString().toRequestBody(jsonMedia))
+            .addPart(html.toRequestBody(htmlMedia))
+            .build()
+        val request = Request.Builder()
+            .url("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id")
+            .header("Authorization", "Bearer $accessToken")
+            .post(multipart)
+            .build()
+        return exec(request)?.let { runCatching { JSONObject(it).optString("id").ifBlank { null } }.getOrNull() }
+    }
+
+    /** Grants "anyone with the link can view" on [fileId]. Returns success. */
+    fun setAnyoneReader(accessToken: String, fileId: String): Boolean {
+        val body = JSONObject().put("role", "reader").put("type", "anyone").toString().toRequestBody(jsonMedia)
+        val request = Request.Builder()
+            .url("https://www.googleapis.com/drive/v3/files/$fileId/permissions")
+            .header("Authorization", "Bearer $accessToken")
+            .post(body)
+            .build()
+        return exec(request) != null
+    }
+
+    /** The public web link for [fileId], or null. */
+    fun webViewLink(accessToken: String, fileId: String): String? {
+        val url = "https://www.googleapis.com/drive/v3/files/$fileId?fields=webViewLink".toHttpUrl()
+        return exec(authGet(accessToken, url))?.let {
+            runCatching { JSONObject(it).optString("webViewLink").ifBlank { null } }.getOrNull()
+        }
     }
 
     private fun authGet(accessToken: String, url: okhttp3.HttpUrl): Request =

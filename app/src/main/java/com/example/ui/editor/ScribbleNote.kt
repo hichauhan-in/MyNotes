@@ -1,11 +1,16 @@
 package com.example.ui.editor
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -30,6 +35,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.material.icons.rounded.ArrowRightAlt
+import androidx.compose.material.icons.rounded.Circle
+import androidx.compose.material.icons.rounded.HorizontalRule
+import androidx.compose.material.icons.rounded.Rectangle
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteSweep
@@ -50,12 +63,14 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
@@ -67,32 +82,74 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
+import com.example.data.attachments.AttachmentStore
+import com.example.data.attachments.EncAttachment
+import com.example.domain.model.AttachmentMarkup
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
-private enum class WbMode { DRAW, MOVE, TEXT }
+private enum class WbMode { DRAW, SHAPE, MOVE, TEXT }
+
+private enum class WbShapeType { LINE, ARROW, RECT, ELLIPSE }
 
 private data class WbText(val id: String, val x: Float, val y: Float, val text: String)
 
 /** A single freehand stroke. [color] 0 means "follow the theme" (onSurface); else a fixed ARGB. */
 private data class WbStroke(val points: List<Offset>, val color: Int, val width: Float)
 
+/** A straight-edged shape drawn between [start] and [end] (canvas coordinates). */
+private data class WbShape(
+    val type: WbShapeType,
+    val start: Offset,
+    val end: Offset,
+    val color: Int,
+    val width: Float,
+)
+
+/** An image placed on the board. [attachment] is the encrypted attachment file name. */
+private data class WbImage(
+    val id: String,
+    val attachment: String,
+    val x: Float,
+    val y: Float,
+    val width: Float,
+    val height: Float,
+)
+
 private data class WbModel(
     val strokes: List<WbStroke>,
+    val shapes: List<WbShape>,
+    val images: List<WbImage>,
     val texts: List<WbText>,
     val panX: Float,
     val panY: Float,
     val scale: Float,
 )
+
+private const val WB_MIN_SCALE = 0.2f
+private const val WB_MAX_SCALE = 8f
 
 private data class PenPreset(val label: String, val width: Float)
 
@@ -115,7 +172,7 @@ private val penColors = listOf(
     0xFFEC407A.toInt(),
 )
 
-private fun emptyWb() = WbModel(emptyList(), emptyList(), 0f, 0f, 1f)
+private fun emptyWb() = WbModel(emptyList(), emptyList(), emptyList(), emptyList(), 0f, 0f, 1f)
 
 private fun parseWb(content: String): WbModel = runCatching {
     if (content.isBlank()) return@runCatching emptyWb()
@@ -152,12 +209,40 @@ private fun parseWb(content: String): WbModel = runCatching {
             t.optString("t"),
         )
     }
+    val shArr = o.optJSONArray("sh") ?: JSONArray()
+    val shapes = (0 until shArr.length()).mapNotNull { i ->
+        val sh = shArr.optJSONObject(i) ?: return@mapNotNull null
+        val type = runCatching { WbShapeType.valueOf(sh.optString("k", "RECT")) }.getOrDefault(WbShapeType.RECT)
+        WbShape(
+            type,
+            Offset(sh.optDouble("sx", 0.0).toFloat(), sh.optDouble("sy", 0.0).toFloat()),
+            Offset(sh.optDouble("ex", 0.0).toFloat(), sh.optDouble("ey", 0.0).toFloat()),
+            sh.optInt("c", 0),
+            sh.optDouble("w", 3.0).toFloat(),
+        )
+    }
+    val imArr = o.optJSONArray("im") ?: JSONArray()
+    val images = (0 until imArr.length()).mapNotNull { i ->
+        val im = imArr.optJSONObject(i) ?: return@mapNotNull null
+        val name = im.optString("a")
+        if (name.isBlank()) return@mapNotNull null
+        WbImage(
+            im.optString("id", UUID.randomUUID().toString()),
+            name,
+            im.optDouble("x", 0.0).toFloat(),
+            im.optDouble("y", 0.0).toFloat(),
+            im.optDouble("w", 300.0).toFloat(),
+            im.optDouble("h", 200.0).toFloat(),
+        )
+    }
     WbModel(
         strokes = strokes,
+        shapes = shapes,
+        images = images,
         texts = texts,
         panX = o.optDouble("px", 0.0).toFloat(),
         panY = o.optDouble("py", 0.0).toFloat(),
-        scale = o.optDouble("sc", 1.0).toFloat().coerceIn(0.3f, 4f),
+        scale = o.optDouble("sc", 1.0).toFloat().coerceIn(WB_MIN_SCALE, WB_MAX_SCALE),
     )
 }.getOrDefault(emptyWb())
 
@@ -173,6 +258,34 @@ private fun serializeWb(m: WbModel): String {
         sArr.put(JSONObject().put("c", stroke.color).put("w", stroke.width.toDouble()).put("p", pts))
     }
     o.put("s", sArr)
+    val shArr = JSONArray()
+    m.shapes.forEach { sh ->
+        shArr.put(
+            JSONObject()
+                .put("k", sh.type.name)
+                .put("sx", sh.start.x.toDouble()).put("sy", sh.start.y.toDouble())
+                .put("ex", sh.end.x.toDouble()).put("ey", sh.end.y.toDouble())
+                .put("c", sh.color).put("w", sh.width.toDouble()),
+        )
+    }
+    o.put("sh", shArr)
+    val imArr = JSONArray()
+    m.images.forEach { im ->
+        imArr.put(
+            JSONObject()
+                .put("id", im.id).put("a", im.attachment)
+                .put("x", im.x.toDouble()).put("y", im.y.toDouble())
+                .put("w", im.width.toDouble()).put("h", im.height.toDouble()),
+        )
+    }
+    o.put("im", imArr)
+    // Embed standard attachment tokens so the app's attachment tracker (AttachmentMarkup.fileNames)
+    // discovers these files for cleanup-on-delete and export bundling.
+    if (m.images.isNotEmpty()) {
+        val att = JSONArray()
+        m.images.forEach { att.put(AttachmentMarkup.imageToken(it.attachment)) }
+        o.put("att", att)
+    }
     val tArr = JSONArray()
     m.texts.forEach { t ->
         tArr.put(JSONObject().put("id", t.id).put("x", t.x.toDouble()).put("y", t.y.toDouble()).put("t", t.text))
@@ -194,6 +307,31 @@ private fun DrawScope.drawWbStroke(points: List<Offset>, color: Color, width: Fl
                 color = color,
                 style = Stroke(width = width.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
             )
+        }
+    }
+}
+
+private fun DrawScope.drawWbShape(type: WbShapeType, start: Offset, end: Offset, color: Color, width: Float) {
+    val w = width.dp.toPx()
+    when (type) {
+        WbShapeType.LINE -> drawLine(color, start, end, strokeWidth = w, cap = StrokeCap.Round)
+        WbShapeType.ARROW -> {
+            drawLine(color, start, end, strokeWidth = w, cap = StrokeCap.Round)
+            val angle = atan2(end.y - start.y, end.x - start.x)
+            val headLen = 18f + width * 1.5f
+            val spread = 0.45f
+            val a1 = angle + Math.PI.toFloat() - spread
+            val a2 = angle + Math.PI.toFloat() + spread
+            drawLine(color, end, Offset(end.x + headLen * cos(a1), end.y + headLen * sin(a1)), strokeWidth = w, cap = StrokeCap.Round)
+            drawLine(color, end, Offset(end.x + headLen * cos(a2), end.y + headLen * sin(a2)), strokeWidth = w, cap = StrokeCap.Round)
+        }
+        WbShapeType.RECT -> {
+            val topLeft = Offset(min(start.x, end.x), min(start.y, end.y))
+            drawRect(color = color, topLeft = topLeft, size = Size(abs(end.x - start.x), abs(end.y - start.y)), style = Stroke(width = w, join = StrokeJoin.Round))
+        }
+        WbShapeType.ELLIPSE -> {
+            val topLeft = Offset(min(start.x, end.x), min(start.y, end.y))
+            drawOval(color = color, topLeft = topLeft, size = Size(abs(end.x - start.x), abs(end.y - start.y)), style = Stroke(width = w))
         }
     }
 }
@@ -223,13 +361,54 @@ internal fun ScribbleEditor(
     var penWidth by remember { mutableStateOf(4f) }
     var penColor by remember { mutableStateOf(0) }
     val livePoints = remember { mutableStateListOf<Offset>() }
+    var shapeType by remember { mutableStateOf(WbShapeType.RECT) }
+    var liveShapeStart by remember { mutableStateOf<Offset?>(null) }
+    var liveShapeEnd by remember { mutableStateOf<Offset?>(null) }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     val defaultStrokeColor = MaterialTheme.colorScheme.onSurface
     val liveColor = if (penColor == 0) defaultStrokeColor else Color(penColor)
     val readOnly = LocalReadOnly.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     fun update(m: WbModel) {
         model = m
         onContentChange(serializeWb(m))
+    }
+
+    fun zoomBy(factor: Float) {
+        val cw = canvasSize.width.toFloat()
+        val ch = canvasSize.height.toFloat()
+        if (cw <= 0f || ch <= 0f) {
+            update(model.copy(scale = (model.scale * factor).coerceIn(WB_MIN_SCALE, WB_MAX_SCALE)))
+            return
+        }
+        val cx = cw / 2f
+        val cy = ch / 2f
+        val newScale = (model.scale * factor).coerceIn(WB_MIN_SCALE, WB_MAX_SCALE)
+        val canvasCx = (cx - model.panX) / model.scale
+        val canvasCy = (cy - model.panY) / model.scale
+        update(model.copy(scale = newScale, panX = cx - canvasCx * newScale, panY = cy - canvasCy * newScale))
+    }
+
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val name = withContext(Dispatchers.IO) { AttachmentStore.importFromUri(context, uri) }
+                if (name != null) {
+                    val cw = canvasSize.width.toFloat()
+                    val ch = canvasSize.height.toFloat()
+                    val cx = if (cw > 0f) (cw / 2f - model.panX) / model.scale else 0f
+                    val cy = if (ch > 0f) (ch / 2f - model.panY) / model.scale else 0f
+                    update(model.copy(images = model.images + WbImage(UUID.randomUUID().toString(), name, cx - 150f, cy - 100f, 300f, 200f)))
+                }
+            }
+        }
+    }
+    fun addImage() {
+        imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -270,6 +449,7 @@ internal fun ScribbleEditor(
                 .clip(RoundedCornerShape(18.dp))
                 .neumorphicRaised(18.dp, neu, elevation = 4.dp)
                 .background(MaterialTheme.colorScheme.surface)
+                .onSizeChanged { canvasSize = it }
                 .clipToBounds(),
         ) {
             val gestureModifier = when (if (readOnly) WbMode.MOVE else mode) {
@@ -298,9 +478,38 @@ internal fun ScribbleEditor(
                     }
                 }
 
+                WbMode.SHAPE -> Modifier.pointerInput(shapeType) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        fun toCanvas(p: Offset) = Offset((p.x - model.panX) / model.scale, (p.y - model.panY) / model.scale)
+                        val start = toCanvas(down.position)
+                        liveShapeStart = start
+                        liveShapeEnd = start
+                        var active = true
+                        while (active) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null || !change.pressed) {
+                                active = false
+                            } else {
+                                liveShapeEnd = toCanvas(change.position)
+                                change.consume()
+                            }
+                        }
+                        val s = liveShapeStart
+                        val e = liveShapeEnd
+                        if (s != null && e != null && (abs(e.x - s.x) > 2f || abs(e.y - s.y) > 2f)) {
+                            update(model.copy(shapes = model.shapes + WbShape(shapeType, s, e, penColor, penWidth)))
+                        }
+                        liveShapeStart = null
+                        liveShapeEnd = null
+                    }
+                }
+
                 WbMode.MOVE -> Modifier.pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        val newScale = (model.scale * zoom).coerceIn(0.3f, 4f)
+                        val newScale = (model.scale * zoom).coerceIn(WB_MIN_SCALE, WB_MAX_SCALE)
                         update(model.copy(panX = model.panX + pan.x, panY = model.panY + pan.y, scale = newScale))
                     }
                 }
@@ -335,11 +544,35 @@ internal fun ScribbleEditor(
                             val c = if (stroke.color == 0) defaultStrokeColor else Color(stroke.color)
                             drawWbStroke(stroke.points, c, stroke.width)
                         }
+                        model.shapes.forEach { shape ->
+                            val c = if (shape.color == 0) defaultStrokeColor else Color(shape.color)
+                            drawWbShape(shape.type, shape.start, shape.end, c, shape.width)
+                        }
                     }
                     // The in-progress stroke lives on its own overlay: each new point only repaints
                     // this single stroke, never the whole board.
                     Canvas(modifier = Modifier.fillMaxSize()) {
                         if (livePoints.isNotEmpty()) drawWbStroke(livePoints.toList(), liveColor, penWidth)
+                        val ls = liveShapeStart
+                        val le = liveShapeEnd
+                        if (ls != null && le != null) drawWbShape(shapeType, ls, le, liveColor, penWidth)
+                    }
+                    model.images.forEach { img ->
+                        key(img.id) {
+                            WbImageNode(
+                                image = img,
+                                onMove = { dx, dy ->
+                                    update(model.copy(images = model.images.map { if (it.id == img.id) it.copy(x = it.x + dx, y = it.y + dy) else it }))
+                                },
+                                onResize = { dw, dh ->
+                                    update(model.copy(images = model.images.map { if (it.id == img.id) it.copy(width = (it.width + dw).coerceAtLeast(60f), height = (it.height + dh).coerceAtLeast(60f)) else it }))
+                                },
+                                onDelete = {
+                                    AttachmentStore.delete(context, img.attachment)
+                                    update(model.copy(images = model.images.filterNot { it.id == img.id }))
+                                },
+                            )
+                        }
                     }
                     model.texts.forEach { textNote ->
                         key(textNote.id) {
@@ -368,9 +601,9 @@ internal fun ScribbleEditor(
                 }
             }
 
-            if (model.strokes.isEmpty() && model.texts.isEmpty() && livePoints.isEmpty()) {
+            if (model.strokes.isEmpty() && model.shapes.isEmpty() && model.images.isEmpty() && model.texts.isEmpty() && livePoints.isEmpty()) {
                 Text(
-                    text = "Scribble anywhere. Switch tools below to pan, zoom, or drop a text note.",
+                    text = "Scribble anywhere. Switch tools below to draw shapes, pan, zoom, or drop a text note.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
                     modifier = Modifier
@@ -384,13 +617,24 @@ internal fun ScribbleEditor(
                     mode = mode,
                     penColor = penColor,
                     penWidth = penWidth,
+                    shapeType = shapeType,
                     onMode = { mode = it },
                     onPenWidth = { penWidth = it; mode = WbMode.DRAW },
                     onPenColor = { penColor = it; mode = WbMode.DRAW },
-                    onUndo = { if (model.strokes.isNotEmpty()) update(model.copy(strokes = model.strokes.dropLast(1))) },
+                    onPickShape = { shapeType = it; mode = WbMode.SHAPE },
+                    onAddImage = { addImage() },
+                    onZoomIn = { zoomBy(1.25f) },
+                    onZoomOut = { zoomBy(0.8f) },
+                    onUndo = {
+                        when {
+                            model.strokes.isNotEmpty() -> update(model.copy(strokes = model.strokes.dropLast(1)))
+                            model.shapes.isNotEmpty() -> update(model.copy(shapes = model.shapes.dropLast(1)))
+                        }
+                    },
                     onClear = {
-                        if (model.strokes.isNotEmpty() || model.texts.isNotEmpty()) {
-                            update(model.copy(strokes = emptyList(), texts = emptyList()))
+                        if (model.strokes.isNotEmpty() || model.shapes.isNotEmpty() || model.images.isNotEmpty() || model.texts.isNotEmpty()) {
+                            model.images.forEach { AttachmentStore.delete(context, it.attachment) }
+                            update(model.copy(strokes = emptyList(), shapes = emptyList(), images = emptyList(), texts = emptyList()))
                         }
                     },
                     onResetView = { update(model.copy(panX = 0f, panY = 0f, scale = 1f)) },
@@ -401,6 +645,79 @@ internal fun ScribbleEditor(
             }
         }
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun WbImageNode(
+    image: WbImage,
+    onMove: (Float, Float) -> Unit,
+    onResize: (Float, Float) -> Unit,
+    onDelete: () -> Unit,
+) {
+    val readOnly = LocalReadOnly.current
+    val density = LocalDensity.current
+    Box(
+        modifier = Modifier
+            .offset { IntOffset(image.x.roundToInt(), image.y.roundToInt()) }
+            .size(with(density) { image.width.toDp() }, with(density) { image.height.toDp() })
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        AsyncImage(
+            model = EncAttachment(image.attachment),
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize(),
+        )
+        if (!readOnly) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            onMove(drag.x, drag.y)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.DragIndicator, contentDescription = "Move image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(16.dp))
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .clickable(onClick = onDelete),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Close, contentDescription = "Delete image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(15.dp))
+            }
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .pointerInput(Unit) {
+                        detectDragGestures { change, drag ->
+                            change.consume()
+                            onResize(drag.x, drag.y)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.OpenInFull, contentDescription = "Resize image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(15.dp))
+            }
+        }
     }
 }
 
@@ -486,9 +803,14 @@ private fun WbToolbar(
     mode: WbMode,
     penColor: Int,
     penWidth: Float,
+    shapeType: WbShapeType,
     onMode: (WbMode) -> Unit,
     onPenWidth: (Float) -> Unit,
     onPenColor: (Int) -> Unit,
+    onPickShape: (WbShapeType) -> Unit,
+    onAddImage: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
     onUndo: () -> Unit,
     onClear: () -> Unit,
     onResetView: () -> Unit,
@@ -497,9 +819,12 @@ private fun WbToolbar(
     val neu = LocalNeuColors.current
     Row(
         modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
             .neumorphicRaised(24.dp, neu, elevation = 8.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(MaterialTheme.colorScheme.surface)
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
@@ -511,12 +836,81 @@ private fun WbToolbar(
             onPickWidth = onPenWidth,
         )
         WbColorButton(penColor = penColor, onPick = onPenColor)
+        WbShapeButton(
+            selected = mode == WbMode.SHAPE,
+            shapeType = shapeType,
+            onSelect = { onMode(WbMode.SHAPE) },
+            onPick = onPickShape,
+        )
         WbToolButton(Icons.Rounded.PanTool, "Move", selected = mode == WbMode.MOVE) { onMode(WbMode.MOVE) }
         WbToolButton(Icons.Rounded.TextFields, "Add text", selected = mode == WbMode.TEXT) { onMode(WbMode.TEXT) }
+        WbToolButton(Icons.Rounded.AddPhotoAlternate, "Add image", selected = false, onClick = onAddImage)
+        WbDivider()
+        WbToolButton(Icons.Rounded.Remove, "Zoom out", selected = false, onClick = onZoomOut)
+        WbToolButton(Icons.Rounded.Add, "Zoom in", selected = false, onClick = onZoomIn)
+        WbToolButton(Icons.Rounded.CenterFocusStrong, "Reset view", selected = false, onClick = onResetView)
         WbDivider()
         WbToolButton(Icons.Rounded.Undo, "Undo", selected = false, onClick = onUndo)
-        WbToolButton(Icons.Rounded.CenterFocusStrong, "Reset view", selected = false, onClick = onResetView)
         WbToolButton(Icons.Rounded.DeleteSweep, "Clear", selected = false, onClick = onClear)
+    }
+}
+
+private val wbShapeOptions = listOf(
+    Triple(WbShapeType.LINE, Icons.Rounded.HorizontalRule, "Line"),
+    Triple(WbShapeType.ARROW, Icons.Rounded.ArrowRightAlt, "Arrow"),
+    Triple(WbShapeType.RECT, Icons.Rounded.Rectangle, "Rectangle"),
+    Triple(WbShapeType.ELLIPSE, Icons.Rounded.Circle, "Ellipse"),
+)
+
+private fun shapeIcon(type: WbShapeType): ImageVector =
+    wbShapeOptions.firstOrNull { it.first == type }?.second ?: Icons.Rounded.Rectangle
+
+/** Shapes tool: tap to draw the current shape, long-press to pick line / arrow / rectangle / ellipse. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WbShapeButton(
+    selected: Boolean,
+    shapeType: WbShapeType,
+    onSelect: () -> Unit,
+    onPick: (WbShapeType) -> Unit,
+) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else Color.Transparent)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onSelect,
+                    onLongClick = { menu = true },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                shapeIcon(shapeType),
+                contentDescription = "Shapes",
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp),
+            )
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            wbShapeOptions.forEach { (type, icon, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    leadingIcon = { Icon(icon, contentDescription = null) },
+                    trailingIcon = {
+                        if (type == shapeType) Icon(Icons.Rounded.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    },
+                    onClick = {
+                        menu = false
+                        onPick(type)
+                    },
+                )
+            }
+        }
     }
 }
 

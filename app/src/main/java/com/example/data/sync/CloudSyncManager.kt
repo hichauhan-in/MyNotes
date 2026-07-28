@@ -52,13 +52,14 @@ class CloudSyncManager(
 
     /** Whether the connected account already has a recovery envelope on Drive. Network call. */
     suspend fun remoteState(accessToken: String): RemoteState = withContext(Dispatchers.IO) {
-        if (DriveRest.findAppDataFile(accessToken, ENVELOPE_NAME) != null) {
-            RemoteState.HAS_ENVELOPE
-        } else if (DriveRest.fetchAccountEmail(accessToken) != null) {
-            // Reached Drive fine, there just isn't an envelope yet.
-            RemoteState.NO_ENVELOPE
-        } else {
-            RemoteState.ERROR
+        // Confirm we can reach Drive first; only then trust an "absent" result. This avoids ever
+        // mistaking a transient failure for "no envelope" (which would prompt a new passphrase and
+        // overwrite the real key, orphaning existing notes).
+        if (DriveRest.fetchAccountEmail(accessToken) == null) return@withContext RemoteState.ERROR
+        when (DriveRest.appDataFileExists(accessToken, ENVELOPE_NAME)) {
+            true -> RemoteState.HAS_ENVELOPE
+            false -> RemoteState.NO_ENVELOPE
+            null -> RemoteState.ERROR
         }
     }
 
@@ -150,7 +151,14 @@ class CloudSyncManager(
      * deletion apart from a note that simply hasn't reached this device yet. Serialized so a manual
      * "Sync now" and an automatic background sync can never run at the same time.
      */
-    suspend fun syncNow(accessToken: String): SyncOutcome = syncMutex.withLock { syncInternal(accessToken) }
+    suspend fun syncNow(accessToken: String): SyncOutcome = syncMutex.withLock {
+        SyncStatus.setSyncing(true)
+        try {
+            syncInternal(accessToken)
+        } finally {
+            SyncStatus.setSyncing(false)
+        }
+    }
 
     private suspend fun syncInternal(accessToken: String): SyncOutcome = withContext(Dispatchers.IO) {
         try {

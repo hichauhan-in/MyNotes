@@ -384,6 +384,7 @@ object Exporter {
 
     private fun expenseLines(content: String): List<String> {
         val o = decodeJsonRaw(content) ?: return listOf("(empty budget)")
+        if (o.optInt("version", 1) >= 2 && o.has("accounts")) return expenseV2Lines(o)
         val out = mutableListOf<String>()
         out.add("Income: ₹${money(o.optDouble("income", 0.0))}")
         val secs = o.optJSONArray("sections") ?: JSONArray()
@@ -405,6 +406,7 @@ object Exporter {
 
     private fun expenseMd(content: String): String {
         val o = decodeJsonRaw(content) ?: return "_(empty budget)_"
+        if (o.optInt("version", 1) >= 2 && o.has("accounts")) return expenseV2Md(o)
         return buildString {
             appendLine("**Income:** ₹${money(o.optDouble("income", 0.0))}")
             val secs = o.optJSONArray("sections") ?: JSONArray()
@@ -426,6 +428,7 @@ object Exporter {
 
     private fun expenseHtml(content: String): String {
         val o = decodeJsonRaw(content) ?: return "<p><em>(empty budget)</em></p>"
+        if (o.optInt("version", 1) >= 2 && o.has("accounts")) return expenseV2Html(o)
         return buildString {
             append("<p><strong>Income:</strong> ₹${money(o.optDouble("income", 0.0))}</p>")
             val secs = o.optJSONArray("sections") ?: JSONArray()
@@ -440,6 +443,96 @@ object Exporter {
                 }
                 append("<h3>${esc(s.optString("name").ifBlank { "Section" })} (₹${money(total)})</h3>")
                 if (lis.isNotEmpty()) append("<ul>").also { lis.forEach { append(it) } }.also { append("</ul>") }
+            }
+        }
+    }
+
+    // ---- Multi-account expense format (version 2) ----
+
+    private fun expenseV2Lines(o: JSONObject): List<String> {
+        val out = mutableListOf<String>()
+        val accs = o.optJSONArray("accounts") ?: JSONArray()
+        if (accs.length() == 0) return listOf("(no accounts)")
+        for (i in 0 until accs.length()) {
+            val a = accs.getJSONObject(i)
+            if (i > 0) out.add("")
+            out.add("${a.optString("name").ifBlank { "Account" }} — Balance ₹${money(a.optDouble("balance", 0.0))}")
+            val tags = a.optJSONArray("tags")
+            if (tags != null && tags.length() > 0) {
+                out.add("  Tags: " + (0 until tags.length()).joinToString(", ") { tags.optString(it) })
+            }
+            val secs = a.optJSONArray("sections") ?: JSONArray()
+            for (j in 0 until secs.length()) {
+                val s = secs.getJSONObject(j)
+                val items = s.optJSONArray("items") ?: JSONArray()
+                var total = 0.0
+                val itemLines = (0 until items.length()).map { k ->
+                    val it = items.getJSONObject(k)
+                    total += it.optDouble("amount", 0.0)
+                    "    - ${it.optString("name").ifBlank { "(unnamed)" }}: ₹${money(it.optDouble("amount", 0.0))}"
+                }
+                val tag = if (s.optBoolean("deduct", true)) " (from balance)" else " (tracked)"
+                out.add("  ${s.optString("name").ifBlank { "Section" }} — ₹${money(total)}$tag")
+                out.addAll(itemLines)
+            }
+        }
+        return out
+    }
+
+    private fun expenseV2Md(o: JSONObject): String = buildString {
+        val accs = o.optJSONArray("accounts") ?: JSONArray()
+        if (accs.length() == 0) { append("_(no accounts)_"); return@buildString }
+        for (i in 0 until accs.length()) {
+            val a = accs.getJSONObject(i)
+            if (i > 0) appendLine()
+            appendLine("## ${a.optString("name").ifBlank { "Account" }} — ₹${money(a.optDouble("balance", 0.0))}")
+            val tags = a.optJSONArray("tags")
+            if (tags != null && tags.length() > 0) {
+                appendLine("_" + (0 until tags.length()).joinToString(", ") { tags.optString(it) } + "_")
+            }
+            val secs = a.optJSONArray("sections") ?: JSONArray()
+            for (j in 0 until secs.length()) {
+                val s = secs.getJSONObject(j)
+                val items = s.optJSONArray("items") ?: JSONArray()
+                var total = 0.0
+                val lines = (0 until items.length()).map { k ->
+                    val it = items.getJSONObject(k)
+                    total += it.optDouble("amount", 0.0)
+                    "- ${it.optString("name").ifBlank { "(unnamed)" }}: ₹${money(it.optDouble("amount", 0.0))}"
+                }
+                appendLine()
+                appendLine("### ${s.optString("name").ifBlank { "Section" }} (₹${money(total)})")
+                lines.forEach { appendLine(it) }
+            }
+        }
+    }.trimEnd()
+
+    private fun expenseV2Html(o: JSONObject): String = buildString {
+        val accs = o.optJSONArray("accounts") ?: JSONArray()
+        if (accs.length() == 0) { append("<p><em>(no accounts)</em></p>"); return@buildString }
+        for (i in 0 until accs.length()) {
+            val a = accs.getJSONObject(i)
+            append("<h2>${esc(a.optString("name").ifBlank { "Account" })} — ₹${money(a.optDouble("balance", 0.0))}</h2>")
+            val tags = a.optJSONArray("tags")
+            if (tags != null && tags.length() > 0) {
+                append("<p><em>" + (0 until tags.length()).joinToString(", ") { esc(tags.optString(it)) } + "</em></p>")
+            }
+            val secs = a.optJSONArray("sections") ?: JSONArray()
+            for (j in 0 until secs.length()) {
+                val s = secs.getJSONObject(j)
+                val items = s.optJSONArray("items") ?: JSONArray()
+                var total = 0.0
+                val lis = (0 until items.length()).map { k ->
+                    val it = items.getJSONObject(k)
+                    total += it.optDouble("amount", 0.0)
+                    "<li>${esc(it.optString("name").ifBlank { "(unnamed)" })}: ₹${money(it.optDouble("amount", 0.0))}</li>"
+                }
+                append("<h3>${esc(s.optString("name").ifBlank { "Section" })} (₹${money(total)})</h3>")
+                if (lis.isNotEmpty()) {
+                    append("<ul>")
+                    lis.forEach { append(it) }
+                    append("</ul>")
+                }
             }
         }
     }
