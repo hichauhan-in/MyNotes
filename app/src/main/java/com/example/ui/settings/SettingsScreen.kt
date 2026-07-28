@@ -4,16 +4,17 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
+import android.text.format.DateUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,14 +55,18 @@ import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SettingsBrightness
 import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Widgets
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +79,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -132,6 +140,21 @@ fun SettingsScreen(
                 }
             }
             .addOnFailureListener { viewModel.onDriveAuthFailed(it.message) }
+    }
+    // "Sync now": silently re-authorize (no UI when already granted) to get a fresh token, then sync.
+    fun syncNow() {
+        viewModel.onSyncStarting()
+        Identity.getAuthorizationClient(driveContext)
+            .authorize(DriveAuth.request())
+            .addOnSuccessListener { authResult ->
+                val token = authResult.accessToken
+                if (!authResult.hasResolution() && token != null) {
+                    viewModel.syncNow(token)
+                } else {
+                    viewModel.onSyncFailed("Please reconnect Google Drive to sync.")
+                }
+            }
+            .addOnFailureListener { viewModel.onSyncFailed(it.message) }
     }
 
     Column(
@@ -224,73 +247,81 @@ fun SettingsScreen(
 
             // ---- Cloud ----
             SettingsSection(title = "Backup & Sync", icon = Icons.Rounded.CloudUpload) {
-                ToggleRow(
-                    icon = Icons.Rounded.CloudUpload,
-                    title = "Encrypted cloud sync",
-                    subtitle = "Sync your notes across devices with Google Drive - end-to-end encrypted",
-                    checked = settings.cloudSyncEnabled,
-                    onCheckedChange = viewModel::setCloudSyncEnabled,
-                )
-                AnimatedVisibility(visible = settings.cloudSyncEnabled) {
-                    Column {
-                        Spacer(Modifier.height(12.dp))
-                        when {
-                            syncState.connecting -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(
-                                        color = MaterialTheme.colorScheme.primary,
-                                        strokeWidth = 2.dp,
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                    Spacer(Modifier.width(12.dp))
-                                    Text(
-                                        text = "Connecting to Google Drive…",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                            }
-                            settings.driveAccountEmail == null -> {
-                                SettingsLinkRow(
-                                    icon = Icons.Rounded.Link,
-                                    title = "Connect Google Drive",
-                                    subtitle = "Choose the account to sync with",
-                                    trailingIcon = Icons.Rounded.ChevronRight,
-                                    onClick = { connectDrive() },
-                                )
-                            }
-                            else -> {
-                                SettingsLinkRow(
-                                    icon = Icons.Rounded.CheckCircle,
-                                    title = "Connected",
-                                    subtitle = settings.driveAccountEmail ?: "",
-                                    onClick = {},
-                                )
-                                SettingsDivider()
-                                SettingsLinkRow(
-                                    icon = Icons.Rounded.LinkOff,
-                                    title = "Disconnect this device",
-                                    subtitle = "Stops syncing here; your Drive copy stays",
-                                    onClick = { viewModel.disconnectDrive() },
-                                )
-                            }
-                        }
-                        syncState.error?.let { error ->
-                            Spacer(Modifier.height(10.dp))
+                when {
+                    syncState.connecting || syncState.busy -> {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(12.dp))
                             Text(
-                                text = error,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
+                                text = if (syncState.busy) "Setting up encryption…" else "Connecting to Google Drive…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        Spacer(Modifier.height(12.dp))
-                        InfoBanner(
-                            icon = Icons.Rounded.Shield,
-                            text = "Every note is encrypted on this device before anything is uploaded, so only unreadable blobs reach Google Drive. The key that unlocks them is protected by your recovery passphrase and is never shared - so neither Google, nor anyone you accidentally share a Drive folder with, can read your notes. Enter the same passphrase on a new device to restore everything.",
-                            tint = MaterialTheme.colorScheme.tertiary,
+                    }
+                    settings.driveAccountEmail == null -> {
+                        SettingsLinkRow(
+                            icon = Icons.Rounded.Link,
+                            title = "Connect Google Drive",
+                            subtitle = "Back up and sync your notes - end-to-end encrypted",
+                            trailingIcon = Icons.Rounded.ChevronRight,
+                            onClick = { connectDrive() },
+                        )
+                    }
+                    else -> {
+                        SettingsLinkRow(
+                            icon = Icons.Rounded.CheckCircle,
+                            title = "Connected",
+                            subtitle = settings.driveAccountEmail ?: "",
+                            onClick = {},
+                        )
+                        if (!settings.recoveryConfigured) {
+                            SettingsDivider()
+                            SettingsLinkRow(
+                                icon = Icons.Rounded.Lock,
+                                title = "Finish encryption setup",
+                                subtitle = "Set your recovery passphrase to start syncing",
+                                trailingIcon = Icons.Rounded.ChevronRight,
+                                onClick = { connectDrive() },
+                            )
+                        } else {
+                            SettingsDivider()
+                            SettingsLinkRow(
+                                icon = Icons.Rounded.Sync,
+                                title = if (syncState.syncing) "Syncing…" else "Sync now",
+                                subtitle = if (syncState.syncing) "Syncing your notes with Drive"
+                                    else lastSyncedLabel(settings.lastSyncedAt),
+                                trailingIcon = if (syncState.syncing) null else Icons.Rounded.ChevronRight,
+                                onClick = { if (!syncState.syncing) syncNow() },
+                            )
+                        }
+                        SettingsDivider()
+                        SettingsLinkRow(
+                            icon = Icons.Rounded.LinkOff,
+                            title = "Disconnect this device",
+                            subtitle = "Stops syncing here; your Drive copy stays",
+                            onClick = { viewModel.disconnectDrive() },
                         )
                     }
                 }
+                syncState.error?.let { error ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                InfoBanner(
+                    icon = Icons.Rounded.Shield,
+                    text = "Every note is encrypted on this device before anything is uploaded, so only unreadable blobs reach Google Drive. The key that unlocks them is protected by your recovery passphrase and is never shared - so neither Google, nor anyone you accidentally share a Drive folder with, can read your notes. Enter the same passphrase on a new device to restore everything.",
+                    tint = MaterialTheme.colorScheme.tertiary,
+                )
             }
 
             Spacer(Modifier.height(20.dp))
@@ -374,12 +405,37 @@ fun SettingsScreen(
     if (showAppInfo) {
         AppInfoDialog(onDismiss = { showAppInfo = false })
     }
+
+    when (syncState.passphrasePrompt) {
+        PassphraseMode.CREATE -> CreatePassphraseDialog(
+            busy = syncState.busy,
+            error = syncState.passphraseError,
+            onConfirm = { viewModel.submitCreatePassphrase(it) },
+            onDismiss = { viewModel.dismissPassphrase() },
+        )
+        PassphraseMode.ENTER -> EnterPassphraseDialog(
+            busy = syncState.busy,
+            error = syncState.passphraseError,
+            onConfirm = { viewModel.submitEnterPassphrase(it) },
+            onDismiss = { viewModel.dismissPassphrase() },
+        )
+        null -> Unit
+    }
 }
 
 private fun exportFolderLabel(uriStr: String): String = runCatching {
     val id = DocumentsContract.getTreeDocumentId(Uri.parse(uriStr))
     id.substringAfter(':').ifBlank { id }
 }.getOrDefault("Selected folder")
+
+private fun lastSyncedLabel(millis: Long): String =
+    if (millis <= 0L) {
+        "Not synced yet"
+    } else {
+        "Last synced " + DateUtils.getRelativeTimeSpanString(
+            millis, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS,
+        )
+    }
 
 @Composable
 private fun SettingsSection(
@@ -814,5 +870,142 @@ private fun AppInfoBullet(text: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f),
         )
+    }
+}
+
+/** Shared surface for the recovery-passphrase dialogs. */
+@Composable
+private fun PassphraseScaffold(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(22.dp),
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(14.dp))
+            content()
+        }
+    }
+}
+
+/** First-time setup: choose a recovery passphrase (with confirmation). */
+@Composable
+private fun CreatePassphraseDialog(
+    busy: Boolean,
+    error: String?,
+    onConfirm: (CharArray) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var pass by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    val tooShort = pass.isNotEmpty() && pass.length < 8
+    val valid = pass.length >= 8 && pass == confirm
+    PassphraseScaffold(title = "Create recovery passphrase", onDismiss = onDismiss) {
+        Text(
+            text = "This passphrase encrypts your cloud backup. You'll need it to restore notes on a " +
+                "new device. If you forget it, the backup can't be recovered - not even by us.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = pass,
+            onValueChange = { pass = it },
+            label = { Text("Passphrase") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = confirm,
+            onValueChange = { confirm = it },
+            label = { Text("Confirm passphrase") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        val warning = when {
+            tooShort -> "Use at least 8 characters."
+            error != null -> error
+            else -> null
+        }
+        warning?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { onConfirm(pass.toCharArray()) }, enabled = valid && !busy) {
+                Text("Set passphrase")
+            }
+        }
+    }
+}
+
+/** New device / reconnect: enter the existing recovery passphrase to unlock the key. */
+@Composable
+private fun EnterPassphraseDialog(
+    busy: Boolean,
+    error: String?,
+    onConfirm: (CharArray) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var pass by remember { mutableStateOf("") }
+    PassphraseScaffold(title = "Enter recovery passphrase", onDismiss = onDismiss) {
+        Text(
+            text = "Enter your recovery passphrase to unlock your encrypted notes on this device.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = pass,
+            onValueChange = { pass = it },
+            label = { Text("Passphrase") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            enabled = !busy,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+            Spacer(Modifier.width(8.dp))
+            Button(onClick = { onConfirm(pass.toCharArray()) }, enabled = pass.isNotEmpty() && !busy) {
+                Text("Unlock")
+            }
+        }
     }
 }

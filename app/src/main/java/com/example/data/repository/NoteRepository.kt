@@ -33,7 +33,6 @@ class NoteRepository(
     suspend fun getNoteById(id: String): Note? = withContext(Dispatchers.IO) {
         noteDao.getNoteById(id)?.toNote()
     }
-
     suspend fun saveNote(note: Note): Unit = withContext(Dispatchers.IO) {
         val existing = noteDao.getNoteById(note.id)
         // Safety net: never overwrite a note whose stored content can't be decrypted right now.
@@ -104,6 +103,48 @@ class NoteRepository(
         attachments.split(",")
             .filter { it.isNotBlank() }
             .forEach { AttachmentStore.delete(appContext, it) }
+    }
+
+    // ---- Cloud sync helpers -----------------------------------------------------
+
+    /** Every note's id mapped to its last-modified time - cheap (no decryption) for merge diffing. */
+    suspend fun idStamps(): Map<String, Long> = withContext(Dispatchers.IO) {
+        noteDao.getAllStamps().associate { it.id to it.updatedAt }
+    }
+
+    /**
+     * The decrypted note for upload, or null if it is missing or currently "locked" (its stored
+     * ciphertext can't be decrypted) - we never upload a placeholder over real data.
+     */
+    suspend fun decryptedNoteForSync(id: String): Note? = withContext(Dispatchers.IO) {
+        val entity = noteDao.getNoteById(id) ?: return@withContext null
+        if (entity.isLocked()) null else entity.toNote()
+    }
+
+    /**
+     * Writes a note pulled from the cloud, preserving its remote timestamps and full state
+     * (archive/trash/etc.). The [validFolderIds] guard drops a dangling book reference so the note
+     * stays visible even when its book hasn't synced to this device. Re-encrypts with this device's
+     * key, so it is safe even when other local notes are currently locked.
+     */
+    suspend fun importFromSync(note: Note, validFolderIds: Set<String>): Unit = withContext(Dispatchers.IO) {
+        val entity = NoteEntity(
+            id = note.id,
+            encryptedTitle = EncryptionManager.encrypt(note.title),
+            encryptedContent = EncryptionManager.encrypt(note.content),
+            createdAt = note.createdAt,
+            updatedAt = note.updatedAt,
+            isPinned = note.isPinned,
+            isFavorite = note.isFavorite,
+            isArchived = note.isArchived,
+            isTrashed = note.isTrashed,
+            folderId = note.folderId?.takeIf { it in validFolderIds },
+            tags = note.tags.joinToString(","),
+            colorArgb = note.colorArgb,
+            type = note.type.name,
+            attachments = note.attachments.joinToString(","),
+        )
+        noteDao.insertNote(entity)
     }
 
     private fun NoteEntity.toNote(): Note {

@@ -12,6 +12,7 @@ import com.example.domain.model.CustomTemplate
 import com.example.data.security.EncryptionManager
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,6 +28,10 @@ data class AppSettings(
     val cloudSyncEnabled: Boolean = false,
     /** The connected Google account email, or null when Drive sync isn't set up. */
     val driveAccountEmail: String? = null,
+    /** True once a recovery passphrase + key envelope have been set up for this account. */
+    val recoveryConfigured: Boolean = false,
+    /** Drive file id of the visible "MyNotes" sync folder, or null if not created yet. */
+    val driveFolderId: String? = null,
     /** True once the one-time "connect Google Drive?" prompt has been shown after onboarding. */
     val syncPrompted: Boolean = false,
     /** Epoch millis of the last successful sync, or 0 if never. */
@@ -54,6 +59,12 @@ class SettingsRepository(context: Context) {
         val ACCENT = intPreferencesKey("accent_index")
         val CLOUD = booleanPreferencesKey("cloud_sync_enabled")
         val DRIVE_EMAIL = stringPreferencesKey("drive_account_email")
+        val RECOVERY_CONFIGURED = booleanPreferencesKey("recovery_configured")
+        val DRIVE_FOLDER_ID = stringPreferencesKey("drive_folder_id")
+        // The Data Encryption Key, wrapped by the device Keystore (never the plaintext DEK).
+        val WRAPPED_DEK = stringPreferencesKey("wrapped_dek")
+        // Comma-joined note ids that were present at the last successful sync (the merge base).
+        val SYNCED_IDS = stringPreferencesKey("synced_note_ids")
         val SYNC_PROMPTED = booleanPreferencesKey("sync_prompted")
         val LAST_SYNCED = androidx.datastore.preferences.core.longPreferencesKey("last_synced_at")
         val LOCK = booleanPreferencesKey("app_lock_enabled")
@@ -84,6 +95,8 @@ class SettingsRepository(context: Context) {
             accentIndex = prefs[Keys.ACCENT] ?: 0,
             cloudSyncEnabled = prefs[Keys.CLOUD] ?: false,
             driveAccountEmail = prefs[Keys.DRIVE_EMAIL],
+            recoveryConfigured = prefs[Keys.RECOVERY_CONFIGURED] ?: false,
+            driveFolderId = prefs[Keys.DRIVE_FOLDER_ID],
             syncPrompted = prefs[Keys.SYNC_PROMPTED] ?: false,
             lastSyncedAt = prefs[Keys.LAST_SYNCED] ?: 0L,
             appLockEnabled = prefs[Keys.LOCK] ?: false,
@@ -109,6 +122,29 @@ class SettingsRepository(context: Context) {
     suspend fun setDriveAccountEmail(email: String?) = edit {
         if (email == null) it.remove(Keys.DRIVE_EMAIL) else it[Keys.DRIVE_EMAIL] = email
     }
+
+    suspend fun setRecoveryConfigured(value: Boolean) =
+        edit { it[Keys.RECOVERY_CONFIGURED] = value }
+
+    suspend fun setDriveFolderId(id: String?) = edit {
+        if (id == null) it.remove(Keys.DRIVE_FOLDER_ID) else it[Keys.DRIVE_FOLDER_ID] = id
+    }
+
+    /** One-shot read of the Keystore-wrapped DEK cached on this device (null if not set up here). */
+    suspend fun wrappedDataKey(): String? = dataStore.data.first()[Keys.WRAPPED_DEK]
+
+    suspend fun setWrappedDataKey(value: String?) = edit {
+        if (value == null) it.remove(Keys.WRAPPED_DEK) else it[Keys.WRAPPED_DEK] = value
+    }
+
+    /** The merge-base set of note ids from the last successful sync. */
+    suspend fun syncedNoteIds(): Set<String> =
+        dataStore.data.first()[Keys.SYNCED_IDS]?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+    suspend fun setSyncedNoteIds(ids: Set<String>) = edit { it[Keys.SYNCED_IDS] = ids.joinToString(",") }
+
+    /** One-shot snapshot of all settings (used by cloud sync for folder id / flags). */
+    suspend fun snapshot(): AppSettings = settings.first()
 
     suspend fun setSyncPrompted(value: Boolean) =
         edit { it[Keys.SYNC_PROMPTED] = value }

@@ -89,6 +89,14 @@ class HomeViewModel : ViewModel() {
         .map { it.defaultExportFolder }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** One-time "connect Google Drive?" prompt: shown after onboarding until acted on / not connected. */
+    val showSyncPrompt: StateFlow<Boolean> = settings.settings
+        .map { it.onboardingComplete && !it.syncPrompted && it.driveAccountEmail == null }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Marks the sync prompt as handled so it never shows again. */
+    fun dismissSyncPrompt() = viewModelScope.launch { settings.setSyncPrompted(true) }
+
     fun setTrashRetention(days: Int) = viewModelScope.launch {
         settings.setTrashRetentionDays(days)
     }

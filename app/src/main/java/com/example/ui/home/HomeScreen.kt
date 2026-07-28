@@ -178,6 +178,7 @@ fun HomeScreen(
     val hasTrashedTemplates = trashedTemplates.isNotEmpty()
     val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
     val allNotesForExport by viewModel.notesForExport.collectAsStateWithLifecycle()
+    val showSyncPrompt by viewModel.showSyncPrompt.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var fabExpanded by remember { mutableStateOf(false) }
@@ -633,6 +634,29 @@ fun HomeScreen(
 
     if (showCoffeeSheet) {
         BuyCoffeeSheet(onDismiss = { showCoffeeSheet = false })
+    }
+
+    if (showSyncPrompt) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissSyncPrompt() },
+            title = { Text("Back up your notes?") },
+            text = {
+                Text(
+                    "Turn on end-to-end encrypted Google Drive sync to back up your notes and open " +
+                        "them on another device. Only you can read them - not even Google. You can " +
+                        "always set this up later in Settings.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.dismissSyncPrompt()
+                    onOpenSettings()
+                }) { Text("Set up") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissSyncPrompt() }) { Text("Not now") }
+            },
+        )
     }
 
     if (showRetentionSheet) {

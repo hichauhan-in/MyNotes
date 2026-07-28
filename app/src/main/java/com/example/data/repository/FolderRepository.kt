@@ -30,6 +30,11 @@ class FolderRepository(
         folder.id
     }
 
+    /** The ids of every existing book, used by cloud sync to detect dangling folder references. */
+    suspend fun folderIdsOnce(): Set<String> = withContext(Dispatchers.IO) {
+        folderDao.getAllFoldersOnce().map { it.id }.toSet()
+    }
+
     suspend fun renameFolder(id: String, name: String) = withContext(Dispatchers.IO) {
         folderDao.renameFolder(id, name.trim().ifBlank { "Untitled book" })
     }

@@ -6,6 +6,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.repository.FolderRepository
 import com.example.data.repository.NoteRepository
 import com.example.data.settings.SettingsRepository
+import com.example.data.sync.CloudSyncManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,6 +27,9 @@ object AppContainer {
         private set
 
     var settingsRepository: SettingsRepository? = null
+        private set
+
+    var cloudSyncManager: CloudSyncManager? = null
         private set
 
     fun init(context: Context) {
@@ -50,6 +54,9 @@ object AppContainer {
         }
         if (settingsRepository == null) {
             settingsRepository = SettingsRepository(context.applicationContext)
+        }
+        if (cloudSyncManager == null) {
+            cloudSyncManager = CloudSyncManager(settingsRepository!!, noteRepository!!, folderRepository!!)
         }
     }
 }

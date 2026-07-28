@@ -6,10 +6,16 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 
+/** Minimal projection (id + last-modified) used by cloud sync to compare without decrypting. */
+data class NoteStamp(val id: String, val updatedAt: Long)
+
 @Dao
 interface NoteDao {
     @Query("SELECT * FROM notes ORDER BY isPinned DESC, updatedAt DESC")
     fun getAllNotes(): Flow<List<NoteEntity>>
+
+    @Query("SELECT id, updatedAt FROM notes")
+    suspend fun getAllStamps(): List<NoteStamp>
 
     @Query("SELECT * FROM notes WHERE id = :id")
     suspend fun getNoteById(id: String): NoteEntity?
