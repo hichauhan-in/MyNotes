@@ -4,4 +4,8 @@
     <files-path
         name="attachments"
         path="attachments/" />
+    <!-- Temporary exported copies handed to other apps via the share sheet. -->
+    <cache-path
+        name="shared_exports"
+        path="shared/" />
 </paths>

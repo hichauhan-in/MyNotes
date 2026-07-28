@@ -7,22 +7,25 @@ import com.example.data.settings.SettingsRepository
 import com.example.domain.model.Note
 import com.example.domain.model.NoteType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Orchestrates the end-to-end-encrypted cloud sync key setup (Slice 2).
+ * Orchestrates the end-to-end-encrypted cloud sync: key setup (recovery passphrase + envelope) and
+ * the two-way note sync itself.
  *
  * Key model (see [SyncCrypto] for the crypto details):
  *  - A random **Data Encryption Key (DEK)** is generated once per account and reused on every
- *    device. It will encrypt note blobs in later slices.
+ *    device. It encrypts every synced note blob (AES-256-GCM).
  *  - The DEK is wrapped with a key derived from the user's **recovery passphrase** and the wrapped
  *    copy (the "envelope") is stored in Drive's hidden *appDataFolder* - never the plaintext DEK.
  *  - On this device the unlocked DEK is cached wrapped by the Android Keystore, so we only ask for
  *    the passphrase once per device (or when restoring on a new one).
  *
- * Nothing here uploads note content yet; that is Slice 3.
+ * [syncNow] performs the two-way, last-write-wins sync of note records to/from the visible folder.
  */
 class CloudSyncManager(
     private val settings: SettingsRepository,
@@ -139,12 +142,17 @@ class CloudSyncManager(
         settings.setSyncedNoteIds(emptySet())
     }
 
+    private val syncMutex = Mutex()
+
     /**
      * Two-way, last-write-wins sync of note records between this device and the visible "MyNotes"
      * Drive folder. Uses a persisted "merge base" (the ids present at the last sync) to tell a real
-     * deletion apart from a note that simply hasn't reached this device yet.
+     * deletion apart from a note that simply hasn't reached this device yet. Serialized so a manual
+     * "Sync now" and an automatic background sync can never run at the same time.
      */
-    suspend fun syncNow(accessToken: String): SyncOutcome = withContext(Dispatchers.IO) {
+    suspend fun syncNow(accessToken: String): SyncOutcome = syncMutex.withLock { syncInternal(accessToken) }
+
+    private suspend fun syncInternal(accessToken: String): SyncOutcome = withContext(Dispatchers.IO) {
         try {
             val dek = localDataKey() ?: return@withContext SyncOutcome.NotUnlocked
             val folderId = settings.snapshot().driveFolderId

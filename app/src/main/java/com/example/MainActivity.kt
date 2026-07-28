@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.di.AppContainer
+import com.example.data.sync.SyncCoordinator
 import com.example.ui.lock.AppLockGate
 import com.example.ui.navigation.MyNotesNavigation
 import com.example.ui.onboarding.OnboardingScreen
@@ -68,5 +69,14 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // Pull any changes made on another device (and push local ones) whenever the app comes to
+        // the foreground. No-op unless Drive is connected and the key is unlocked on this device.
+        val settings = AppContainer.settingsRepository ?: return
+        val manager = AppContainer.cloudSyncManager ?: return
+        SyncCoordinator.autoSync(this, settings, manager, AppContainer.applicationScope)
     }
 }

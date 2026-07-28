@@ -16,9 +16,8 @@ data class RemoteNoteMeta(val fileId: String, val noteId: String, val updatedAt:
 /**
  * Thin Google Drive v3 REST client used by cloud sync. It only ever sends already-encrypted bytes,
  * and talks to Drive with a short-lived OAuth access token obtained via the Authorization API.
- *
- * Slice 1 only needs [fetchAccountEmail] to prove the whole OAuth chain works end-to-end; the
- * folder/file/appData operations are added in later slices.
+ * Covers the account probe, the visible sync folder, the hidden appData key envelope, and the
+ * per-note blob list/upload/download/delete used by the two-way sync.
  */
 object DriveRest {
 

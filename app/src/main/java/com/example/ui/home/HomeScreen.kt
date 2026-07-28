@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FitnessCenter
@@ -138,6 +139,7 @@ import com.example.data.attachments.EncAttachment
 import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
+import com.example.data.export.ShareIO
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Folder
 import com.example.domain.model.Note
@@ -199,6 +201,8 @@ fun HomeScreen(
     var showDeleteBooksForeverDialog by remember { mutableStateOf(false) }
     var exportBookFor by remember { mutableStateOf<Folder?>(null) }
     var pendingBookExport by remember { mutableStateOf<Pair<String, ExportFormat>?>(null) }
+    var noteShareFor by remember { mutableStateOf<Note?>(null) }
+    var shareBookFor by remember { mutableStateOf<Folder?>(null) }
 
     val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
     val foldersById = remember(allFolders) { allFolders.associateBy { it.id } }
@@ -282,6 +286,44 @@ fun HomeScreen(
                 pendingBookExport = book.id to format
                 runCatching { exportBookLauncher.launch(fileName) }
             }
+        }
+    }
+
+    // Share a note's plain text straight to another app.
+    fun shareNoteText(note: Note) {
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                String(Exporter.noteBytes(note, ExportFormat.TXT), Charsets.UTF_8)
+            }
+            ShareIO.shareText(context, note.title.ifBlank { "Note" }, text)
+        }
+    }
+
+    // Share a note as a single file (PDF / Markdown) via the system share sheet.
+    fun shareNoteFile(note: Note, format: ExportFormat) {
+        val fileName = "${Exporter.noteFileBase(note)}.${format.ext}"
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                ShareIO.writeShareFile(context, fileName, Exporter.noteBytes(note, format))
+            }
+            if (uri != null) ShareIO.shareFile(context, uri, format.mime, note.title)
+            else android.widget.Toast.makeText(context, "Couldn't share", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Share a whole book as a ZIP (folder tree + notes + attachments) via the system share sheet.
+    fun shareBook(book: Folder, format: ExportFormat) {
+        val fileName = "${Exporter.safe(book.name)}.zip"
+        val folders = allFolders
+        val notes = allNotesForExport
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                ShareIO.writeShareStream(context, fileName) { out ->
+                    Exporter.writeBookZip(context, book.id, folders, notes, format, out)
+                }
+            }
+            if (uri != null) ShareIO.shareFile(context, uri, "application/zip", book.name)
+            else android.widget.Toast.makeText(context, "Couldn't share", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -627,6 +669,10 @@ fun HomeScreen(
                 actionNote = null
                 moveTargetNote = current
             },
+            onShare = {
+                actionNote = null
+                noteShareFor = current
+            },
             onDismiss = { actionNote = null },
             viewModel = viewModel,
         )
@@ -778,6 +824,29 @@ fun HomeScreen(
         )
     }
 
+    shareBookFor?.let { book ->
+        BookExportSheet(
+            bookName = book.name,
+            title = "Share \"${book.name}\"",
+            subtitle = "Shared as a ZIP that keeps the book's folder structure and attachments. " +
+                "Pick the format for the notes inside.",
+            onPick = { format ->
+                shareBookFor = null
+                shareBook(book, format)
+            },
+            onDismiss = { shareBookFor = null },
+        )
+    }
+
+    noteShareFor?.let { note ->
+        NoteShareSheet(
+            onShareText = { noteShareFor = null; shareNoteText(note) },
+            onSharePdf = { noteShareFor = null; shareNoteFile(note, ExportFormat.PDF) },
+            onShareMarkdown = { noteShareFor = null; shareNoteFile(note, ExportFormat.MD) },
+            onDismiss = { noteShareFor = null },
+        )
+    }
+
     bookActionsFor?.let { book ->
         BookActionsSheet(
             book = book,
@@ -805,6 +874,10 @@ fun HomeScreen(
             onExport = {
                 bookActionsFor = null
                 exportBookFor = book
+            },
+            onShare = {
+                bookActionsFor = null
+                shareBookFor = book
             },
             onDismiss = { bookActionsFor = null },
         )
@@ -1763,6 +1836,7 @@ private fun NoteActionsSheet(
     note: Note,
     filter: NoteFilter,
     onMove: () -> Unit,
+    onShare: () -> Unit,
     onDismiss: () -> Unit,
     viewModel: HomeViewModel,
 ) {
@@ -1809,6 +1883,7 @@ private fun NoteActionsSheet(
                     if (note.isArchived) "Unarchive" else "Archive",
                 ) { viewModel.toggleArchive(note); onDismiss() }
                 SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
+                SheetAction(Icons.Rounded.Share, "Share") { onShare() }
                 SheetAction(Icons.Rounded.Delete, "Move to Trash", destructive = true) {
                     viewModel.moveToTrash(note); onDismiss()
                 }
@@ -2349,6 +2424,7 @@ private fun BookActionsSheet(
     onRestore: () -> Unit,
     onDeleteForever: () -> Unit,
     onExport: () -> Unit,
+    onShare: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState()
@@ -2386,6 +2462,7 @@ private fun BookActionsSheet(
                 SheetAction(Icons.Rounded.Edit, "Rename") { onRename() }
                 SheetAction(Icons.Rounded.Folder, "Move to book") { onMove() }
                 SheetAction(Icons.Rounded.FileDownload, "Export book") { onExport() }
+                SheetAction(Icons.Rounded.Share, "Share book") { onShare() }
                 SheetAction(Icons.Rounded.Delete, "Delete book", destructive = true) { onDelete() }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -2403,6 +2480,9 @@ private fun BookActionsSheet(
 @Composable
 private fun BookExportSheet(
     bookName: String,
+    title: String = "Export \"$bookName\"",
+    subtitle: String = "Saved as a ZIP that keeps the book's folder structure and attachments. " +
+        "Pick the format for the notes inside.",
     onPick: (ExportFormat) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -2419,7 +2499,7 @@ private fun BookExportSheet(
                 .padding(bottom = 28.dp),
         ) {
             Text(
-                text = "Export \"$bookName\"",
+                text = title,
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -2428,8 +2508,7 @@ private fun BookExportSheet(
             )
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "Saved as a ZIP that keeps the book's folder structure and attachments. " +
-                    "Pick the format for the notes inside.",
+                text = subtitle,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -2438,6 +2517,46 @@ private fun BookExportSheet(
             SheetAction(Icons.Rounded.Description, "Notes as Markdown") { onPick(ExportFormat.MD) }
             SheetAction(Icons.Rounded.Description, "Notes as plain text") { onPick(ExportFormat.TXT) }
             SheetAction(Icons.Rounded.Code, "Notes as web pages") { onPick(ExportFormat.HTML) }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NoteShareSheet(
+    onShareText: () -> Unit,
+    onSharePdf: () -> Unit,
+    onShareMarkdown: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp),
+        ) {
+            Text(
+                text = "Share",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = "Choose how you'd like to share this note.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            SheetAction(Icons.Rounded.Share, "Share as text") { onShareText() }
+            SheetAction(Icons.Rounded.PictureAsPdf, "Share as PDF") { onSharePdf() }
+            SheetAction(Icons.Rounded.Description, "Share as Markdown") { onShareMarkdown() }
         }
     }
 }

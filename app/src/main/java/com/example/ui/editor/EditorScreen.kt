@@ -75,7 +75,6 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.FileDownload
-import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TextSnippet
@@ -170,6 +169,7 @@ import com.example.data.attachments.EncAttachment
 import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
+import com.example.data.export.ShareIO
 import com.example.domain.model.AttachmentKind
 import com.example.domain.model.AttachmentMarkup
 import com.example.domain.model.Checklist as ChecklistUtil
@@ -491,6 +491,33 @@ fun EditorScreen(
             else -> {
                 pendingExportFormat = format
                 runCatching { exportDocLauncher.launch(fileName) }
+            }
+        }
+    }
+
+    // Share the note's plain text straight to another app (messaging, mail, notes, etc.).
+    fun shareNoteText() {
+        val note = buildExportNote()
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                String(Exporter.noteBytes(note, ExportFormat.TXT), Charsets.UTF_8)
+            }
+            ShareIO.shareText(context, note.title.ifBlank { "Note" }, text)
+        }
+    }
+
+    // Share the note as a single file (PDF / Markdown) via the system share sheet.
+    fun shareNoteFile(format: ExportFormat) {
+        val note = buildExportNote()
+        val fileName = "${Exporter.noteFileBase(note)}.${format.ext}"
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                ShareIO.writeShareFile(context, fileName, Exporter.noteBytes(note, format))
+            }
+            if (uri != null) {
+                ShareIO.shareFile(context, uri, format.mime, note.title)
+            } else {
+                android.widget.Toast.makeText(context, "Couldn't share", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -837,7 +864,12 @@ fun EditorScreen(
     }
 
     if (showShareSheet) {
-        ShareOptionsSheet(onDismiss = { showShareSheet = false })
+        ShareOptionsSheet(
+            onShareText = { showShareSheet = false; shareNoteText() },
+            onSharePdf = { showShareSheet = false; shareNoteFile(ExportFormat.PDF) },
+            onShareMarkdown = { showShareSheet = false; shareNoteFile(ExportFormat.MD) },
+            onDismiss = { showShareSheet = false },
+        )
     }
 
     if (showExportSheet) {
@@ -1753,8 +1785,12 @@ private fun ColorSwatch(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ShareOptionsSheet(onDismiss: () -> Unit) {
-    val context = LocalContext.current
+private fun ShareOptionsSheet(
+    onShareText: () -> Unit,
+    onSharePdf: () -> Unit,
+    onShareMarkdown: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val sheetState = rememberModalBottomSheetState()
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1780,15 +1816,9 @@ private fun ShareOptionsSheet(onDismiss: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(16.dp))
-            SheetOptionRow(Icons.Rounded.Share, "Share as text", "Send the note's text to another app") {
-                comingSoon(context); onDismiss()
-            }
-            SheetOptionRow(Icons.Rounded.PictureAsPdf, "Share as PDF", "Attach a PDF copy") {
-                comingSoon(context); onDismiss()
-            }
-            SheetOptionRow(Icons.Rounded.Link, "Copy link", "A shareable link to this note") {
-                comingSoon(context); onDismiss()
-            }
+            SheetOptionRow(Icons.Rounded.Share, "Share as text", "Send the note's text to another app", onShareText)
+            SheetOptionRow(Icons.Rounded.PictureAsPdf, "Share as PDF", "Attach a PDF copy", onSharePdf)
+            SheetOptionRow(Icons.Rounded.Description, "Share as Markdown", "Attach a .md copy", onShareMarkdown)
         }
     }
 }
@@ -1854,10 +1884,6 @@ private fun SheetOptionRow(icon: ImageVector, title: String, subtitle: String, o
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-}
-
-private fun comingSoon(context: android.content.Context) {
-    android.widget.Toast.makeText(context, "Coming soon", android.widget.Toast.LENGTH_SHORT).show()
 }
 
 @Composable
