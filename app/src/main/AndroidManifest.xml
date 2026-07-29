@@ -17,7 +17,7 @@
     <!-- The on-device GenAI (Gemini Nano) library targets API 26; the app supports 24. The AI
          features are runtime-gated (Build.VERSION + feature-status checks) so they simply don't
          appear on API 24/25 or on devices without AICore. -->
-    <uses-sdk tools:overrideLibrary="com.google.mlkit.genai.summarization" />
+    <uses-sdk tools:overrideLibrary="com.google.mlkit.genai.summarization, com.google.mlkit.genai.common, com.google.mlkit.nl.entityextraction, com.google.mlkit.vision.digitalink" />
 
     <application
         android:name=".VaultNotesApp"

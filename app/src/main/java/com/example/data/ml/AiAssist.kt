@@ -34,7 +34,7 @@ object AiAssist {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
         val summarizer = runCatching { Summarization.getClient(buildOptions(context)) }.getOrNull() ?: return false
         return try {
-            awaitTask(summarizer.checkFeatureStatus()) != FeatureStatus.UNAVAILABLE
+            awaitFuture(summarizer.checkFeatureStatus()) != FeatureStatus.UNAVAILABLE
         } catch (e: Exception) {
             false
         } finally {
@@ -49,7 +49,7 @@ object AiAssist {
         if (clean.length < 200) return null
         val summarizer = runCatching { Summarization.getClient(buildOptions(context)) }.getOrNull() ?: return null
         return try {
-            if (awaitTask(summarizer.checkFeatureStatus()) == FeatureStatus.UNAVAILABLE) return null
+            if (awaitFuture(summarizer.checkFeatureStatus()) == FeatureStatus.UNAVAILABLE) return null
             val request = SummarizationRequest.builder(clean).build()
             // runInference (no callback) returns a future; the model auto-downloads on first use.
             val result = withContext(Dispatchers.IO) { summarizer.runInference(request).get() }
@@ -65,4 +65,18 @@ object AiAssist {
         task.addOnSuccessListener { if (cont.isActive) cont.resume(it) }
             .addOnFailureListener { if (cont.isActive) cont.resumeWithException(it) }
     }
+
+    private suspend fun <T> awaitFuture(future: com.google.common.util.concurrent.ListenableFuture<T>): T =
+        suspendCancellableCoroutine { cont ->
+            future.addListener(
+                {
+                    try {
+                        cont.resume(future.get())
+                    } catch (e: Exception) {
+                        cont.resumeWithException(e)
+                    }
+                },
+                { runnable -> runnable.run() },
+            )
+        }
 }
