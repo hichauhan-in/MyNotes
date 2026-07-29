@@ -6,13 +6,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [NoteEntity::class, FolderEntity::class],
-    version = 6,
+    entities = [NoteEntity::class, FolderEntity::class, ReminderEntity::class],
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun noteDao(): NoteDao
     abstract fun folderDao(): FolderDao
+    abstract fun reminderDao(): ReminderDao
 
     companion object {
         /** Adds the note `type` column (TEXT / CHECKLIST) without wiping existing notes. */
@@ -41,6 +42,31 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE folders ADD COLUMN isTrashed INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE folders ADD COLUMN trashedAt INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** Creates the reminders table (title/body stored encrypted, like notes). */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS reminders (" +
+                        "id TEXT NOT NULL PRIMARY KEY, " +
+                        "encryptedTitle TEXT NOT NULL, " +
+                        "encryptedBody TEXT NOT NULL, " +
+                        "noteId TEXT, " +
+                        "triggerAt INTEGER NOT NULL, " +
+                        "repeat TEXT NOT NULL, " +
+                        "enabled INTEGER NOT NULL, " +
+                        "createdAt INTEGER NOT NULL)",
+                )
+            }
+        }
+
+        /** Adds the reminder `updatedAt` column so reminders can sync (last-write-wins). */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE reminders ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE reminders SET updatedAt = createdAt")
             }
         }
     }

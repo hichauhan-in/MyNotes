@@ -6,6 +6,7 @@ import coil.ImageLoaderFactory
 import com.example.data.attachments.AttachmentStore
 import com.example.data.attachments.EncAttachmentKeyer
 import com.example.data.attachments.EncryptedAttachmentFetcher
+import com.example.data.reminders.NotificationHelper
 import com.example.di.AppContainer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -15,6 +16,7 @@ class VaultNotesApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         AppContainer.init(this)
+        NotificationHelper.ensureChannel(this)
         purgeExpiredTrash()
         encryptExistingAttachments()
     }

@@ -5,6 +5,7 @@ import androidx.room.Room
 import com.example.data.local.AppDatabase
 import com.example.data.repository.FolderRepository
 import com.example.data.repository.NoteRepository
+import com.example.data.repository.ReminderRepository
 import com.example.data.settings.SettingsRepository
 import com.example.data.sync.CloudSyncManager
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +27,9 @@ object AppContainer {
     var folderRepository: FolderRepository? = null
         private set
 
+    var reminderRepository: ReminderRepository? = null
+        private set
+
     var settingsRepository: SettingsRepository? = null
         private set
 
@@ -45,18 +49,27 @@ object AppContainer {
                     AppDatabase.MIGRATION_3_4,
                     AppDatabase.MIGRATION_4_5,
                     AppDatabase.MIGRATION_5_6,
+                    AppDatabase.MIGRATION_6_7,
+                    AppDatabase.MIGRATION_7_8,
                 )
                 // Any other unknown schema jump: wipe & rebuild rather than crash.
                 .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
             noteRepository = NoteRepository(database!!.noteDao(), context.applicationContext)
             folderRepository = FolderRepository(database!!.folderDao(), database!!.noteDao(), context.applicationContext)
+            reminderRepository = ReminderRepository(database!!.reminderDao())
         }
         if (settingsRepository == null) {
             settingsRepository = SettingsRepository(context.applicationContext)
         }
         if (cloudSyncManager == null) {
-            cloudSyncManager = CloudSyncManager(settingsRepository!!, noteRepository!!, folderRepository!!)
+            cloudSyncManager = CloudSyncManager(
+                settingsRepository!!,
+                noteRepository!!,
+                folderRepository!!,
+                reminderRepository!!,
+                context.applicationContext,
+            )
         }
     }
 }

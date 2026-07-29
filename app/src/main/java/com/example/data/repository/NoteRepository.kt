@@ -30,6 +30,9 @@ class NoteRepository(
         // collected in viewModelScope (which defaults to the main dispatcher).
         .flowOn(Dispatchers.Default)
 
+    /** Emits whenever the notes table changes - a trigger for cloud sync. */
+    fun changeSignal(): Flow<Int> = noteDao.changeSignal()
+
     suspend fun getNoteById(id: String): Note? = withContext(Dispatchers.IO) {
         noteDao.getNoteById(id)?.toNote()
     }
@@ -110,6 +113,11 @@ class NoteRepository(
     /** Every note's id mapped to its last-modified time - cheap (no decryption) for merge diffing. */
     suspend fun idStamps(): Map<String, Long> = withContext(Dispatchers.IO) {
         noteDao.getAllStamps().associate { it.id to it.updatedAt }
+    }
+
+    /** Count of live notes (excludes Trash + Archive). Used by the home-screen widget. */
+    suspend fun activeNoteCount(): Int = withContext(Dispatchers.IO) {
+        noteDao.getActiveNoteCount()
     }
 
     /**

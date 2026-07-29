@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -18,12 +19,15 @@ import com.example.ui.editor.EditorViewModel
 import com.example.ui.home.HomeScreen
 import com.example.ui.home.HomeViewModel
 import com.example.ui.settings.SettingsScreen
+import com.example.ui.reminders.ReminderScreen
+import com.example.ui.reminders.ReminderViewModel
 import com.example.ui.settings.SettingsViewModel
 
 private object Routes {
     const val HOME = "home"
     const val EDITOR = "editor?noteId={noteId}&template={template}&folderId={folderId}&templateId={templateId}"
     const val SETTINGS = "settings"
+    const val REMINDERS = "reminders"
 
     fun editor(
         noteId: String? = null,
@@ -42,9 +46,46 @@ private object Routes {
 }
 
 @Composable
-fun MyNotesNavigation() {
+fun MyNotesNavigation(
+    pendingQuickAction: String? = null,
+    onQuickActionHandled: () -> Unit = {},
+    pendingOpenNoteId: String? = null,
+    onOpenNoteHandled: () -> Unit = {},
+    pendingOpenReminders: Boolean = false,
+    onOpenRemindersHandled: () -> Unit = {},
+) {
     val navController = rememberNavController()
     val dur = 300
+
+    // A home-screen widget can ask us to open the editor with a specific note type on launch.
+    LaunchedEffect(pendingQuickAction) {
+        if (pendingQuickAction != null) {
+            val template = when (pendingQuickAction) {
+                "checklist" -> "checklist"
+                "expense" -> "expense"
+                "board" -> "scribble"
+                else -> null // plain note
+            }
+            navController.navigate(Routes.editor(template = template))
+            onQuickActionHandled()
+        }
+    }
+
+    // A reminder notification can ask us to open a specific note.
+    LaunchedEffect(pendingOpenNoteId) {
+        if (pendingOpenNoteId != null) {
+            navController.navigate(Routes.editor(noteId = pendingOpenNoteId))
+            onOpenNoteHandled()
+        }
+    }
+
+    // The reminders widget can ask us to open the Reminders screen.
+    LaunchedEffect(pendingOpenReminders) {
+        if (pendingOpenReminders) {
+            navController.navigate(Routes.REMINDERS)
+            onOpenRemindersHandled()
+        }
+    }
 
     NavHost(
         navController = navController,
@@ -81,6 +122,16 @@ fun MyNotesNavigation() {
                     navController.navigate(Routes.editor(templateId = templateId))
                 },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                onOpenReminders = { navController.navigate(Routes.REMINDERS) },
+            )
+        }
+
+        composable(Routes.REMINDERS) {
+            val viewModel: ReminderViewModel = viewModel()
+            ReminderScreen(
+                viewModel = viewModel,
+                onBack = { navController.popBackStack() },
+                onOpenNote = { noteId -> navController.navigate(Routes.editor(noteId = noteId)) },
             )
         }
 

@@ -37,7 +37,7 @@ data class Note(
                 (if (it.checked) "✓ " else "○ ") + it.text
             }.trim()
             isExpense -> "Expense tracker"
-            isScribble -> "Whiteboard"
+            isScribble -> "Board"
             else -> AttachmentMarkup.stripTokens(content).trim().replace(Regex("\\s+"), " ")
         }
 

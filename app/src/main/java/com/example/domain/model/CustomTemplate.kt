@@ -13,4 +13,6 @@ data class CustomTemplate(
     val content: String,
     /** When non-null, the template is in Trash and this is when it was deleted (epoch millis). */
     val trashedAt: Long? = null,
+    /** Last time this template was created/edited/trashed (epoch millis) - used to merge on sync. */
+    val updatedAt: Long = 0L,
 )

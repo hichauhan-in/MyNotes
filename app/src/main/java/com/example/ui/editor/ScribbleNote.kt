@@ -426,7 +426,7 @@ internal fun ScribbleEditor(
             decorationBox = { inner ->
                 if (title.isEmpty()) {
                     Text(
-                        text = "Whiteboard",
+                        text = "Board",
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                     )
@@ -603,7 +603,7 @@ internal fun ScribbleEditor(
 
             if (model.strokes.isEmpty() && model.shapes.isEmpty() && model.images.isEmpty() && model.texts.isEmpty() && livePoints.isEmpty()) {
                 Text(
-                    text = "Scribble anywhere. Switch tools below to draw shapes, pan, zoom, or drop a text note.",
+                    text = "Draw anywhere with your finger or stylus. Switch tools below to add shapes, pan, zoom, or drop a text note.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
                     modifier = Modifier

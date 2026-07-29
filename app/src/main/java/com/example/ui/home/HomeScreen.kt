@@ -20,6 +20,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +47,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,7 +79,7 @@ import androidx.compose.material.icons.rounded.Style
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Archive
-import androidx.compose.material.icons.rounded.Brush
+import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
@@ -89,16 +91,17 @@ import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.CurrencyRupee
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteForever
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Folder
-import androidx.compose.material.icons.rounded.Gesture
 import androidx.compose.material.icons.rounded.Groups
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LocalCafe
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.Search
@@ -150,6 +153,7 @@ import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
 import com.example.data.export.ShareIO
+import com.example.data.share.NoteSharing
 import com.example.data.sync.DriveAuth
 import com.example.data.sync.DriveShare
 import com.example.data.sync.SyncStatus
@@ -157,6 +161,8 @@ import com.google.android.gms.auth.api.identity.Identity
 import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Folder
 import com.example.domain.model.Note
+import com.example.ui.share.ImportPassphraseDialog
+import com.example.ui.share.SharePassphraseDialog
 import com.example.ui.components.BrandGradientButton
 import com.example.ui.components.EmptyState
 import com.example.ui.components.NeuCard
@@ -179,6 +185,7 @@ fun HomeScreen(
     onCreateNote: (template: String?, folderId: String?) -> Unit,
     onEditTemplate: (templateId: String) -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenReminders: () -> Unit = {},
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
@@ -197,6 +204,7 @@ fun HomeScreen(
     val showSyncPrompt by viewModel.showSyncPrompt.collectAsStateWithLifecycle()
     val syncEnabled by viewModel.syncEnabled.collectAsStateWithLifecycle()
     val driveConnected by viewModel.driveConnected.collectAsStateWithLifecycle()
+    val swipeNavEnabled by viewModel.swipeNavigationEnabled.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var fabExpanded by remember { mutableStateOf(false) }
@@ -218,6 +226,10 @@ fun HomeScreen(
     var exportBookFor by remember { mutableStateOf<Folder?>(null) }
     var pendingBookExport by remember { mutableStateOf<Pair<String, ExportFormat>?>(null) }
     var noteShareFor by remember { mutableStateOf<Note?>(null) }
+    var noteEncryptFor by remember { mutableStateOf<Note?>(null) }
+    var importUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var importWrong by remember { mutableStateOf(false) }
+    var importBusy by remember { mutableStateOf(false) }
     var shareBookFor by remember { mutableStateOf<Folder?>(null) }
 
     val allFolders by viewModel.allFolders.collectAsStateWithLifecycle()
@@ -365,9 +377,79 @@ fun HomeScreen(
             }
     }
 
+    // Pack a note (+ attachments) into an encrypted .mynote file locked by [passphrase] and share it.
+    fun shareNoteEncrypted(note: Note, passphrase: CharArray) {
+        val fileName = "${Exporter.noteFileBase(note)}.${NoteSharing.FILE_EXTENSION}"
+        android.widget.Toast.makeText(context, "Encrypting…", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                val bytes = NoteSharing.exportEncrypted(context, note, passphrase) ?: return@withContext null
+                ShareIO.writeShareFile(context, fileName, bytes)
+            }
+            if (uri != null) ShareIO.shareFile(context, uri, NoteSharing.MIME, note.title.ifBlank { "Note" })
+            else android.widget.Toast.makeText(context, "Couldn't create share file", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Import: pick any file, then the passphrase dialog decrypts it into a new note.
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            importWrong = false
+            importUri = uri
+        }
+    }
+    fun startImport() {
+        runCatching { importLauncher.launch(arrayOf("*/*")) }
+    }
+    fun runImport(passphrase: CharArray) {
+        val uri = importUri ?: return
+        importBusy = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                val bytes = runCatching { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }.getOrNull()
+                if (bytes == null) NoteSharing.ImportResult.Invalid
+                else NoteSharing.importEncrypted(context, bytes, passphrase)
+            }
+            importBusy = false
+            when (result) {
+                is NoteSharing.ImportResult.Success -> {
+                    viewModel.saveImportedNote(result.note)
+                    importUri = null
+                    importWrong = false
+                    android.widget.Toast.makeText(context, "Note imported", android.widget.Toast.LENGTH_SHORT).show()
+                }
+                NoteSharing.ImportResult.WrongPassphrase -> importWrong = true
+                NoteSharing.ImportResult.Invalid -> {
+                    importUri = null
+                    importWrong = false
+                    android.widget.Toast.makeText(context, "That file isn't a MyNotes share", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
     // Shared across the empty and populated layouts so the filter row keeps its horizontal scroll
     // position when a tab switches between empty and full (e.g. selecting Trash after deleting).
     val filterScrollState = rememberScrollState()
+
+    // Optional (Settings): a horizontal swipe on the notes area moves between filter tabs.
+    val swipeModifier = if (swipeNavEnabled && !selectionMode && !bookSelectionMode) {
+        Modifier.pointerInput(swipeNavEnabled) {
+            var totalDx = 0f
+            detectHorizontalDragGestures(
+                onDragStart = { totalDx = 0f },
+                onHorizontalDrag = { _, dragAmount -> totalDx += dragAmount },
+                onDragEnd = {
+                    val threshold = 72.dp.toPx()
+                    when {
+                        totalDx <= -threshold -> viewModel.cycleFilter(forward = true)
+                        totalDx >= threshold -> viewModel.cycleFilter(forward = false)
+                    }
+                },
+            )
+        }
+    } else {
+        Modifier
+    }
 
     Box(
         modifier = Modifier
@@ -376,6 +458,7 @@ fun HomeScreen(
     ) {
         if (state.isEmpty && !state.loading && !selectionMode && !bookSelectionMode &&
             !(selectedFilter == NoteFilter.TRASH && hasTrashedTemplates)) {
+            Box(modifier = Modifier.fillMaxSize().then(swipeModifier)) {
             EmptyHomeContent(
                 insets = insets,
                 noteCount = state.totalNotes,
@@ -391,10 +474,11 @@ fun HomeScreen(
                 onOpenSettings = onOpenSettings,
                 onSyncClick = if (syncEnabled) ({ viewModel.triggerSync(context) }) else null,
             )
+            }
         } else {
         LazyVerticalStaggeredGrid(
             columns = StaggeredGridCells.Adaptive(168.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().then(swipeModifier),
             contentPadding = PaddingValues(
                 start = 20.dp,
                 end = 20.dp,
@@ -654,6 +738,14 @@ fun HomeScreen(
                     fabExpanded = false
                     showBookCreator = true
                 },
+                onImport = {
+                    fabExpanded = false
+                    startImport()
+                },
+                onReminder = {
+                    fabExpanded = false
+                    onOpenReminders()
+                },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .padding(end = 20.dp, bottom = insets.calculateBottomPadding() + 24.dp),
@@ -887,8 +979,28 @@ fun HomeScreen(
             onShareText = { noteShareFor = null; shareNoteText(note) },
             onSharePdf = { noteShareFor = null; shareNoteFile(note, ExportFormat.PDF) },
             onShareMarkdown = { noteShareFor = null; shareNoteFile(note, ExportFormat.MD) },
+            onShareEncrypted = { noteShareFor = null; noteEncryptFor = note },
             onShareDriveLink = if (driveConnected) ({ noteShareFor = null; shareNoteDriveLink(note) }) else null,
             onDismiss = { noteShareFor = null },
+        )
+    }
+
+    noteEncryptFor?.let { note ->
+        SharePassphraseDialog(
+            onConfirm = { passphrase ->
+                noteEncryptFor = null
+                shareNoteEncrypted(note, passphrase)
+            },
+            onDismiss = { noteEncryptFor = null },
+        )
+    }
+
+    if (importUri != null) {
+        ImportPassphraseDialog(
+            wrong = importWrong,
+            busy = importBusy,
+            onConfirm = { passphrase -> runImport(passphrase) },
+            onDismiss = { if (!importBusy) { importUri = null; importWrong = false } },
         )
     }
 
@@ -1624,7 +1736,7 @@ private fun NoteCard(
                             Icon(
                                 imageVector = when {
                                     note.isExpense -> Icons.Rounded.AccountBalanceWallet
-                                    else -> Icons.Rounded.Brush
+                                    else -> Icons.Rounded.Draw
                                 },
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
@@ -1634,7 +1746,7 @@ private fun NoteCard(
                             Text(
                                 text = when {
                                     note.isExpense -> "Expenses"
-                                    else -> "Whiteboard"
+                                    else -> "Board"
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
@@ -1733,6 +1845,8 @@ private fun ExpandableFab(
     onToggle: () -> Unit,
     onAction: (template: String?) -> Unit,
     onCreateBook: () -> Unit,
+    onImport: () -> Unit,
+    onReminder: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val neu = LocalNeuColors.current
@@ -1748,15 +1862,19 @@ private fun ExpandableFab(
             exit = fadeOut(),
         ) {
             Column(horizontalAlignment = Alignment.End) {
-                FabAction("New book", Icons.Rounded.CreateNewFolder) { onCreateBook() }
+                FabAction("New book", Icons.Rounded.CreateNewFolder, bordered = true, iconSlotSize = 62.dp) { onCreateBook() }
                 Spacer(Modifier.height(12.dp))
-                FabAction("Expenses", Icons.Rounded.AccountBalanceWallet) { onAction("expense") }
+                FabAction("Reminder", Icons.Rounded.NotificationsActive, bordered = true, iconSlotSize = 62.dp) { onReminder() }
                 Spacer(Modifier.height(12.dp))
-                FabAction("Scribble", Icons.Rounded.Gesture) { onAction("scribble") }
+                FabAction("Expenses", Icons.Rounded.AccountBalanceWallet, bordered = true, iconSlotSize = 62.dp) { onAction("expense") }
                 Spacer(Modifier.height(12.dp))
-                FabAction("Checklist", Icons.Rounded.Checklist) { onAction("checklist") }
+                FabAction("Board", Icons.Rounded.Draw, bordered = true, iconSlotSize = 62.dp) { onAction("scribble") }
                 Spacer(Modifier.height(12.dp))
-                FabAction("New note", Icons.Rounded.EditNote) { onAction(null) }
+                FabAction("Checklist", Icons.Rounded.Checklist, bordered = true, iconSlotSize = 62.dp) { onAction("checklist") }
+                Spacer(Modifier.height(12.dp))
+                FabAction("Import note", Icons.Rounded.Download, bordered = true, iconSlotSize = 62.dp) { onImport() }
+                Spacer(Modifier.height(12.dp))
+                FabAction("New note", Icons.Rounded.EditNote, bordered = true, iconSlotSize = 62.dp) { onAction(null) }
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -2714,6 +2832,7 @@ private fun NoteShareSheet(
     onShareText: () -> Unit,
     onSharePdf: () -> Unit,
     onShareMarkdown: () -> Unit,
+    onShareEncrypted: () -> Unit,
     onDismiss: () -> Unit,
     onShareDriveLink: (() -> Unit)? = null,
 ) {
@@ -2745,6 +2864,7 @@ private fun NoteShareSheet(
             SheetAction(Icons.Rounded.Share, "Share as text") { onShareText() }
             SheetAction(Icons.Rounded.PictureAsPdf, "Share as PDF") { onSharePdf() }
             SheetAction(Icons.Rounded.Description, "Share as Markdown") { onShareMarkdown() }
+            SheetAction(Icons.Rounded.Lock, "Share encrypted") { onShareEncrypted() }
             if (onShareDriveLink != null) {
                 SheetAction(Icons.Rounded.Link, "Share a link") { onShareDriveLink() }
             }

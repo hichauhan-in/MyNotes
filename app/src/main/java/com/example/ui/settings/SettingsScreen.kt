@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
+import android.provider.Settings
 import android.text.format.DateUtils
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
@@ -51,11 +52,15 @@ import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.NotificationsActive
 import androidx.compose.material.icons.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SettingsBrightness
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Sync
+import androidx.compose.material.icons.rounded.Swipe
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
@@ -91,6 +96,7 @@ import com.example.ui.components.NeuIconButton
 import com.example.ui.components.NeuSurface
 import com.example.ui.theme.ThemeMode
 import com.example.ui.theme.brandGradientHorizontal
+import com.example.ui.util.responsiveHorizontalPadding
 
 @Composable
 fun SettingsScreen(
@@ -100,6 +106,7 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val syncState by viewModel.syncState.collectAsStateWithLifecycle()
     val insets = WindowInsets.systemBars.asPaddingValues()
+    val contentSidePadding = responsiveHorizontalPadding(compact = 20.dp)
     var showAppInfo by remember { mutableStateOf(false) }
 
     // Google Drive connect flow: the Authorization API returns an access token directly, or a
@@ -188,7 +195,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
+                .padding(horizontal = contentSidePadding)
                 .padding(bottom = insets.calculateBottomPadding() + 32.dp),
         ) {
             // ---- Appearance ----
@@ -321,6 +328,78 @@ fun SettingsScreen(
                     icon = Icons.Rounded.Shield,
                     text = "Every note is encrypted on this device before anything is uploaded, so only unreadable blobs reach Google Drive. The key that unlocks them is protected by your recovery passphrase and is never shared - so neither Google, nor anyone you accidentally share a Drive folder with, can read your notes. Enter the same passphrase on a new device to restore everything.",
                     tint = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // ---- Notifications ----
+            SettingsSection(title = "Notifications", icon = Icons.Rounded.NotificationsActive) {
+                val notifContext = LocalContext.current
+                SettingsLinkRow(
+                    icon = Icons.Rounded.NotificationsActive,
+                    title = "Notification settings",
+                    subtitle = "Manage how reminders alert you",
+                    trailingIcon = Icons.Rounded.OpenInNew,
+                    onClick = {
+                        runCatching {
+                            notifContext.startActivity(
+                                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                    .putExtra(Settings.EXTRA_APP_PACKAGE, notifContext.packageName),
+                            )
+                        }
+                    },
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    SettingsDivider()
+                    val canExact = com.example.data.reminders.ReminderScheduler.canScheduleExact(notifContext)
+                    SettingsLinkRow(
+                        icon = Icons.Rounded.Schedule,
+                        title = "Precise reminders",
+                        subtitle = if (canExact) "On - reminders fire at the exact time you set"
+                        else "Off - reminders may arrive a little late. Tap to allow.",
+                        trailingIcon = if (canExact) null else Icons.Rounded.OpenInNew,
+                        onClick = {
+                            runCatching {
+                                notifContext.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
+                            }
+                        },
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "Reminders you set on a note or from the + menu appear here as notifications. " +
+                        "They are stored encrypted on your device and never leave it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            // ---- Additional configurations ----
+            SettingsSection(title = "Additional configurations", icon = Icons.Rounded.Tune) {
+                ToggleRow(
+                    icon = Icons.Rounded.Edit,
+                    title = "Open notes in edit mode",
+                    subtitle = if (settings.openNotesInEditMode)
+                        "Notes open ready to edit"
+                    else
+                        "Notes open read-only - tap the pencil to edit",
+                    checked = settings.openNotesInEditMode,
+                    onCheckedChange = { viewModel.setOpenNotesInEditMode(it) },
+                )
+                SettingsDivider()
+                ToggleRow(
+                    icon = Icons.Rounded.Swipe,
+                    title = "Swipe between tabs",
+                    subtitle = if (settings.swipeNavigationEnabled)
+                        "Swipe left or right on the home screen to switch tabs"
+                    else
+                        "Use the filter chips only",
+                    checked = settings.swipeNavigationEnabled,
+                    onCheckedChange = { viewModel.setSwipeNavigationEnabled(it) },
                 )
             }
 
@@ -791,7 +870,7 @@ private fun AppInfoDialog(onDismiss: () -> Unit) {
                     }
                     AppInfoSection(icon = Icons.Rounded.Widgets, title = "What's inside") {
                         AppInfoBullet("Notes, checklists, tables and callouts.")
-                        AppInfoBullet("Whiteboards and expense trackers.")
+                        AppInfoBullet("Boards and expense trackers.")
                         AppInfoBullet("Photos, voice notes and reusable templates.")
                         AppInfoBullet("A recoverable Trash so nothing is lost by accident.")
                     }

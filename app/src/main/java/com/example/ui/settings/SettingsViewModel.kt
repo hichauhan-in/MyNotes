@@ -76,6 +76,14 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { repository.setDefaultExportFolder(uri) }
     }
 
+    fun setOpenNotesInEditMode(value: Boolean) {
+        viewModelScope.launch { repository.setOpenNotesInEditMode(value) }
+    }
+
+    fun setSwipeNavigationEnabled(value: Boolean) {
+        viewModelScope.launch { repository.setSwipeNavigationEnabled(value) }
+    }
+
     // ---- Google Drive sync ----
 
     /** Called while the account picker / consent screen is showing. */

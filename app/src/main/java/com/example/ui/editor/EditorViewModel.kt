@@ -43,6 +43,8 @@ data class EditorUiState(
     val editingTemplateId: String? = null,
     /** The icon key chosen for the template. */
     val iconKey: String = "note",
+    /** For existing notes: whether to open straight into edit mode (user preference). */
+    val startInEditMode: Boolean = false,
 ) {
     val wordCount: Int
         get() = AttachmentMarkup.stripTokens(content).trim()
@@ -132,6 +134,7 @@ class EditorViewModel : ViewModel() {
             val note = repository.getNoteById(id)
             if (note != null) {
                 persisted = true
+                val openEdit = settings.snapshot().openNotesInEditMode
                 _state.value = EditorUiState(
                     id = note.id,
                     title = note.title,
@@ -146,6 +149,7 @@ class EditorViewModel : ViewModel() {
                     tags = note.tags,
                     folderId = note.folderId,
                     saveStatus = SaveStatus.Saved,
+                    startInEditMode = openEdit,
                 )
             }
         }

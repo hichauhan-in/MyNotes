@@ -14,6 +14,10 @@ interface NoteDao {
     @Query("SELECT * FROM notes ORDER BY isPinned DESC, updatedAt DESC")
     fun getAllNotes(): Flow<List<NoteEntity>>
 
+    /** Emits on every write to the notes table - a lightweight "something changed" signal. */
+    @Query("SELECT COUNT(*) FROM notes")
+    fun changeSignal(): Flow<Int>
+
     @Query("SELECT id, updatedAt FROM notes")
     suspend fun getAllStamps(): List<NoteStamp>
 
@@ -64,6 +68,10 @@ interface NoteDao {
 
     @Query("SELECT attachments FROM notes WHERE folderId IN (:folderIds)")
     suspend fun getAttachmentsInFolders(folderIds: List<String>): List<String>
+
+    /** Count of live notes (excludes Trash and Archive) - used by the home-screen widget. */
+    @Query("SELECT COUNT(*) FROM notes WHERE isTrashed = 0 AND isArchived = 0")
+    suspend fun getActiveNoteCount(): Int
 
     @Query("DELETE FROM notes WHERE folderId IN (:folderIds)")
     suspend fun deleteNotesInFolders(folderIds: List<String>)

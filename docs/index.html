@@ -194,6 +194,14 @@
           <td>Network access (<code>INTERNET</code>, <code>ACCESS_NETWORK_STATE</code>)</td>
           <td>Used only if you turn on <strong>encrypted Google Drive sync</strong>, to upload and download your already‑encrypted notes to your own Google Drive. With sync off, the app makes no network connections at all.</td>
         </tr>
+        <tr>
+          <td>Notifications (<code>POST_NOTIFICATIONS</code>)</td>
+          <td>Used only to show the <strong>reminders</strong> you create. Android asks for this the first time you set a reminder; if you decline, reminders simply won't show a notification. No other notifications are ever posted.</td>
+        </tr>
+        <tr>
+          <td>Alarms &amp; reboot (<code>SCHEDULE_EXACT_ALARM</code>, <code>RECEIVE_BOOT_COMPLETED</code>)</td>
+          <td>Used only to fire your reminders at the time you choose and to re‑arm them after the phone restarts. Reminder text is stored <strong>encrypted on your device</strong>; it only ever leaves the device as <strong>end‑to‑end encrypted</strong> data if you turn on Google Drive sync (see below).</td>
+        </tr>
       </table>
       <p class="muted" style="margin-top:14px;">The app requests no location or contacts permissions, and no camera permission of its own - photos are added through the Android system photo picker or camera app.</p>
     </div>
@@ -203,8 +211,9 @@
       <p><span class="pill">Off by default</span></p>
       <p>
         Cloud sync is <strong>disabled by default</strong> and only ever runs if you deliberately turn it on
-        and connect a Google account. When enabled, every note and attachment is
-        <strong>encrypted on your device before it is uploaded</strong>, so only unreadable
+        and connect a Google account. When enabled, every note (of any type), your saved
+        <strong>templates</strong> and your <strong>reminders</strong> are
+        <strong>encrypted on your device before they are uploaded</strong>, so only unreadable
         <strong>ciphertext blobs</strong> are stored in your Google Drive.
       </p>
       <p>
@@ -227,6 +236,14 @@
         <strong>not end‑to‑end encrypted</strong> — anyone who has the link can open it. Nothing is shared
         until you use this option, and you can revoke access at any time by deleting the file from the
         “MyNotes Shared” folder in your Google Drive.
+      </p>
+      <p class="muted">
+        <strong>“Share encrypted” is the private alternative.</strong> Choosing <em>Share → Share encrypted</em>
+        packs the note into a <strong>passphrase‑locked <code>.mynote</code> file</strong> that is
+        <strong>encrypted on your device</strong> before it leaves the app. It is <strong>not uploaded
+        anywhere</strong> — you send the file through whatever app you like, and the recipient opens it inside
+        MyNotes with the passphrase you gave them. Without that passphrase the file is unreadable, even to the
+        app you sent it through.
       </p>
     </div>
 

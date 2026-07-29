@@ -46,6 +46,7 @@ object Exporter {
     private val TABLE = Regex("""^\[\[table:([A-Za-z0-9+/=]+)]]$""")
     private val CALLOUT = Regex("""^\[\[callout:([A-Za-z0-9+/=]+)]]$""")
     private val SCRIBBLE = Regex("""^\[\[scribble:([A-Za-z0-9+/=]+)]]$""")
+    private val INK = Regex("""^\[\[ink:([A-Za-z0-9+/=]+)]]$""")
 
     // ---- Public API -------------------------------------------------------------
 
@@ -219,6 +220,7 @@ object Exporter {
                 tbl != null -> appendLine(tableToText(decodeCells(tbl.groupValues[1])))
                 cal != null -> { val (e, t) = decodeCallout(cal.groupValues[1]); appendLine("$e $t".trim()) }
                 SCRIBBLE.matches(l) -> appendLine("[Sketch]")
+                INK.matches(l) -> appendLine("[Handwriting]")
                 else -> appendLine(raw)
             }
         }
@@ -231,6 +233,7 @@ object Exporter {
             val tbl = TABLE.matchEntire(l)
             val cal = CALLOUT.matchEntire(l)
             val scr = SCRIBBLE.matchEntire(l)
+            val ink = INK.matchEntire(l)
             when {
                 img != null -> {
                     val f = img.groupValues[2]
@@ -242,6 +245,7 @@ object Exporter {
                 tbl != null -> { appendLine(tableToMd(decodeCells(tbl.groupValues[1]))) }
                 cal != null -> { val (e, t) = decodeCallout(cal.groupValues[1]); appendLine("> $e $t".trim()) }
                 scr != null -> appendLine(scribbleBlockPng(scr.groupValues[1])?.let { "![sketch](${dataUri(it)})" } ?: "_[Sketch]_")
+                ink != null -> appendLine(inkPng(ink.groupValues[1])?.let { "![handwriting](${dataUri(it)})" } ?: "_[Handwriting]_")
                 else -> appendLine(raw)
             }
         }
@@ -266,6 +270,7 @@ object Exporter {
             val tbl = TABLE.matchEntire(l)
             val cal = CALLOUT.matchEntire(l)
             val scr = SCRIBBLE.matchEntire(l)
+            val ink = INK.matchEntire(l)
             when {
                 l.isEmpty() -> flush()
                 img != null -> {
@@ -288,6 +293,12 @@ object Exporter {
                     val png = scribbleBlockPng(scr.groupValues[1])
                     if (png != null) sb.append("<img src=\"").append(dataUri(png)).append("\" alt=\"sketch\">")
                     else sb.append("<p><em>[Sketch]</em></p>")
+                }
+                ink != null -> {
+                    flush()
+                    val png = inkPng(ink.groupValues[1])
+                    if (png != null) sb.append("<img src=\"").append(dataUri(png)).append("\" alt=\"handwriting\">")
+                    else sb.append("<p><em>[Handwriting]</em></p>")
                 }
                 l.startsWith("### ") -> { flush(); sb.append("<h3>").append(inlineMd(l.removePrefix("### "))).append("</h3>") }
                 l.startsWith("## ") -> { flush(); sb.append("<h2>").append(inlineMd(l.removePrefix("## "))).append("</h2>") }
@@ -452,6 +463,13 @@ object Exporter {
     private fun expenseV2Lines(o: JSONObject): List<String> {
         val out = mutableListOf<String>()
         val accs = o.optJSONArray("accounts") ?: JSONArray()
+        fun accName(id: String): String {
+            for (i in 0 until accs.length()) {
+                val a = accs.getJSONObject(i)
+                if (a.optString("id") == id) return a.optString("name").ifBlank { "Account" }
+            }
+            return "?"
+        }
         if (accs.length() == 0) return listOf("(no accounts)")
         for (i in 0 until accs.length()) {
             val a = accs.getJSONObject(i)
@@ -476,11 +494,27 @@ object Exporter {
                 out.addAll(itemLines)
             }
         }
+        val transfers = o.optJSONArray("transfers")
+        if (transfers != null && transfers.length() > 0) {
+            out.add("")
+            out.add("Bank transfers")
+            for (i in 0 until transfers.length()) {
+                val t = transfers.getJSONObject(i)
+                out.add("  - ${t.optString("name").ifBlank { "Transfer" }}: ${accName(t.optString("from"))} -> ${accName(t.optString("to"))} = ₹${money(t.optDouble("amount", 0.0))}")
+            }
+        }
         return out
     }
 
     private fun expenseV2Md(o: JSONObject): String = buildString {
         val accs = o.optJSONArray("accounts") ?: JSONArray()
+        fun accName(id: String): String {
+            for (i in 0 until accs.length()) {
+                val a = accs.getJSONObject(i)
+                if (a.optString("id") == id) return a.optString("name").ifBlank { "Account" }
+            }
+            return "?"
+        }
         if (accs.length() == 0) { append("_(no accounts)_"); return@buildString }
         for (i in 0 until accs.length()) {
             val a = accs.getJSONObject(i)
@@ -505,10 +539,26 @@ object Exporter {
                 lines.forEach { appendLine(it) }
             }
         }
+        val transfers = o.optJSONArray("transfers")
+        if (transfers != null && transfers.length() > 0) {
+            appendLine()
+            appendLine("## Bank transfers")
+            for (i in 0 until transfers.length()) {
+                val t = transfers.getJSONObject(i)
+                appendLine("- ${t.optString("name").ifBlank { "Transfer" }}: ${accName(t.optString("from"))} → ${accName(t.optString("to"))} (₹${money(t.optDouble("amount", 0.0))})")
+            }
+        }
     }.trimEnd()
 
     private fun expenseV2Html(o: JSONObject): String = buildString {
         val accs = o.optJSONArray("accounts") ?: JSONArray()
+        fun accName(id: String): String {
+            for (i in 0 until accs.length()) {
+                val a = accs.getJSONObject(i)
+                if (a.optString("id") == id) return a.optString("name").ifBlank { "Account" }
+            }
+            return "?"
+        }
         if (accs.length() == 0) { append("<p><em>(no accounts)</em></p>"); return@buildString }
         for (i in 0 until accs.length()) {
             val a = accs.getJSONObject(i)
@@ -535,14 +585,23 @@ object Exporter {
                 }
             }
         }
+        val transfers = o.optJSONArray("transfers")
+        if (transfers != null && transfers.length() > 0) {
+            append("<h2>Bank transfers</h2><ul>")
+            for (i in 0 until transfers.length()) {
+                val t = transfers.getJSONObject(i)
+                append("<li>${esc(t.optString("name").ifBlank { "Transfer" })}: ${esc(accName(t.optString("from")))} → ${esc(accName(t.optString("to")))} (₹${money(t.optDouble("amount", 0.0))})</li>")
+            }
+            append("</ul>")
+        }
     }
 
     private fun scribbleToText(content: String): String {
-        val o = decodeJsonRaw(content) ?: return "[Whiteboard]"
+        val o = decodeJsonRaw(content) ?: return "[Board]"
         val texts = o.optJSONArray("t") ?: JSONArray()
         val notes = (0 until texts.length()).map { texts.getJSONObject(it).optString("t") }.filter { it.isNotBlank() }
         return buildString {
-            append("[Whiteboard drawing]")
+            append("[Board drawing]")
             if (notes.isNotEmpty()) {
                 append("\n\nNotes on the board:\n")
                 append(notes.joinToString("\n") { "- $it" })
@@ -673,13 +732,30 @@ object Exporter {
     private fun noteScribblePngs(note: Note): List<ByteArray> {
         if (note.type == NoteType.SCRIBBLE) return listOfNotNull(whiteboardPng(note.content))
         return note.content.split("\n").mapNotNull { line ->
-            SCRIBBLE.matchEntire(line.trim())?.let { scribbleBlockPng(it.groupValues[1]) }
+            val l = line.trim()
+            SCRIBBLE.matchEntire(l)?.let { return@mapNotNull scribbleBlockPng(it.groupValues[1]) }
+            INK.matchEntire(l)?.let { return@mapNotNull inkPng(it.groupValues[1]) }
+            null
         }
+    }
+
+    /** Rasterises a page-ink token ({s:[{c,w,p}]}) to a PNG, or null if it has no strokes. */
+    private fun inkPng(b64: String): ByteArray? {
+        val o = decodeJson(b64) ?: return null
+        val s = o.optJSONArray("s") ?: return null
+        val strokes = (0 until s.length()).mapNotNull { i ->
+            val el = s.optJSONObject(i) ?: return@mapNotNull null
+            el.optJSONArray("p")?.toPoints()?.takeIf { it.isNotEmpty() }?.let {
+                val color = el.optInt("c", 0).let { c -> if (c == 0) SCRIBBLE_INK else c }
+                RenderStroke(it, color, el.optDouble("w", 3.0).toFloat().coerceAtLeast(2f))
+            }
+        }
+        return drawScribblePng(strokes, emptyList())
     }
 
     private fun whiteboardHtml(content: String): String = buildString {
         whiteboardPng(content)?.let { append("<img src=\"").append(dataUri(it)).append("\" alt=\"whiteboard\">") }
-            ?: append("<p><em>[Whiteboard]</em></p>")
+            ?: append("<p><em>[Board]</em></p>")
         val notes = boardTextNotes(content)
         if (notes.isNotEmpty()) {
             append("<p>Notes on the board:<br>")
@@ -690,7 +766,7 @@ object Exporter {
 
     private fun whiteboardMd(content: String): String = buildString {
         whiteboardPng(content)?.let { append("![whiteboard](").append(dataUri(it)).append(")\n") }
-            ?: append("_[Whiteboard]_\n")
+            ?: append("_[Board]_\n")
         val notes = boardTextNotes(content)
         if (notes.isNotEmpty()) {
             append("\nNotes on the board:\n")

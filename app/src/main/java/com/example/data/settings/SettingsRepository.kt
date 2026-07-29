@@ -43,6 +43,10 @@ data class AppSettings(
     val onboardingComplete: Boolean = false,
     /** Persisted SAF tree Uri (as string) of the default export folder, or null if unset. */
     val defaultExportFolder: String? = null,
+    /** When true, opening an existing note goes straight into edit mode instead of read-only. */
+    val openNotesInEditMode: Boolean = false,
+    /** When true, a horizontal swipe on the home screen moves between the filter tabs. */
+    val swipeNavigationEnabled: Boolean = false,
 )
 
 /**
@@ -65,6 +69,8 @@ class SettingsRepository(context: Context) {
         val WRAPPED_DEK = stringPreferencesKey("wrapped_dek")
         // Comma-joined note ids that were present at the last successful sync (the merge base).
         val SYNCED_IDS = stringPreferencesKey("synced_note_ids")
+        // Comma-joined reminder ids present at the last successful sync (their merge base).
+        val SYNCED_REMINDER_IDS = stringPreferencesKey("synced_reminder_ids")
         val SYNC_PROMPTED = booleanPreferencesKey("sync_prompted")
         val LAST_SYNCED = androidx.datastore.preferences.core.longPreferencesKey("last_synced_at")
         val LOCK = booleanPreferencesKey("app_lock_enabled")
@@ -73,6 +79,8 @@ class SettingsRepository(context: Context) {
         val ONBOARDING_DONE = booleanPreferencesKey("onboarding_complete")
         val TEMPLATES = stringPreferencesKey("custom_templates")
         val EXPORT_FOLDER = stringPreferencesKey("default_export_folder")
+        val OPEN_IN_EDIT = booleanPreferencesKey("open_notes_in_edit_mode")
+        val SWIPE_NAV = booleanPreferencesKey("swipe_navigation_enabled")
     }
 
     val customTemplates: Flow<List<CustomTemplate>> = dataStore.data.map { prefs ->
@@ -104,6 +112,8 @@ class SettingsRepository(context: Context) {
             trashRetentionDays = prefs[Keys.TRASH_RETENTION] ?: 30,
             onboardingComplete = prefs[Keys.ONBOARDING_DONE] ?: false,
             defaultExportFolder = prefs[Keys.EXPORT_FOLDER],
+            openNotesInEditMode = prefs[Keys.OPEN_IN_EDIT] ?: false,
+            swipeNavigationEnabled = prefs[Keys.SWIPE_NAV] ?: false,
         )
     }
 
@@ -143,6 +153,13 @@ class SettingsRepository(context: Context) {
 
     suspend fun setSyncedNoteIds(ids: Set<String>) = edit { it[Keys.SYNCED_IDS] = ids.joinToString(",") }
 
+    /** The merge-base set of reminder ids from the last successful sync. */
+    suspend fun syncedReminderIds(): Set<String> =
+        dataStore.data.first()[Keys.SYNCED_REMINDER_IDS]?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+    suspend fun setSyncedReminderIds(ids: Set<String>) =
+        edit { it[Keys.SYNCED_REMINDER_IDS] = ids.joinToString(",") }
+
     /** One-shot snapshot of all settings (used by cloud sync for folder id / flags). */
     suspend fun snapshot(): AppSettings = settings.first()
 
@@ -168,24 +185,32 @@ class SettingsRepository(context: Context) {
         if (uri == null) it.remove(Keys.EXPORT_FOLDER) else it[Keys.EXPORT_FOLDER] = uri
     }
 
+    suspend fun setOpenNotesInEditMode(value: Boolean) =
+        edit { it[Keys.OPEN_IN_EDIT] = value }
+
+    suspend fun setSwipeNavigationEnabled(value: Boolean) =
+        edit { it[Keys.SWIPE_NAV] = value }
+
     suspend fun addTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
-        prefs[Keys.TEMPLATES] = serializeTemplates(current + template)
+        prefs[Keys.TEMPLATES] = serializeTemplates(current + template.copy(updatedAt = System.currentTimeMillis()))
     }
 
     suspend fun updateTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        val stamped = template.copy(updatedAt = System.currentTimeMillis())
         prefs[Keys.TEMPLATES] = serializeTemplates(
-            current.map { if (it.id == template.id) template else it },
+            current.map { if (it.id == template.id) stamped else it },
         )
     }
 
     suspend fun deleteTemplate(id: String) = dataStore.edit { prefs ->
         // Soft delete: move the template into Trash so it can be recovered for the retention window.
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
+        val now = System.currentTimeMillis()
         prefs[Keys.TEMPLATES] = serializeTemplates(
             current.map {
-                if (it.id == id && it.trashedAt == null) it.copy(trashedAt = System.currentTimeMillis()) else it
+                if (it.id == id && it.trashedAt == null) it.copy(trashedAt = now, updatedAt = now) else it
             },
         )
     }
@@ -193,7 +218,7 @@ class SettingsRepository(context: Context) {
     suspend fun restoreTemplate(id: String) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")
         prefs[Keys.TEMPLATES] = serializeTemplates(
-            current.map { if (it.id == id) it.copy(trashedAt = null) else it },
+            current.map { if (it.id == id) it.copy(trashedAt = null, updatedAt = System.currentTimeMillis()) else it },
         )
     }
 
@@ -216,6 +241,15 @@ class SettingsRepository(context: Context) {
         prefs[Keys.TEMPLATES] = serializeTemplates(current.filter { it.trashedAt == null })
     }
 
+    /** One-shot read of every template (including trashed) - used by cloud sync to merge. */
+    suspend fun allTemplatesForSync(): List<CustomTemplate> =
+        parseTemplates(dataStore.data.first()[Keys.TEMPLATES] ?: "[]")
+
+    /** Overwrites the whole template list (used by cloud sync after merging). */
+    suspend fun replaceAllTemplates(items: List<CustomTemplate>) = dataStore.edit { prefs ->
+        prefs[Keys.TEMPLATES] = serializeTemplates(items)
+    }
+
     private fun parseTemplates(json: String): List<CustomTemplate> = runCatching {
         val arr = JSONArray(json)
         (0 until arr.length()).map { i ->
@@ -226,6 +260,7 @@ class SettingsRepository(context: Context) {
                 iconKey = o.optString("icon", "note"),
                 content = decryptField(o.optString("content")),
                 trashedAt = if (o.has("trashedAt") && !o.isNull("trashedAt")) o.optLong("trashedAt") else null,
+                updatedAt = o.optLong("updatedAt", 0L),
             )
         }
     }.getOrDefault(emptyList())
@@ -240,6 +275,7 @@ class SettingsRepository(context: Context) {
                 .put("name", EncryptionManager.encrypt(it.name))
                 .put("icon", it.iconKey)
                 .put("content", EncryptionManager.encrypt(it.content))
+                .put("updatedAt", it.updatedAt)
             if (it.trashedAt != null) o.put("trashedAt", it.trashedAt)
             arr.put(o)
         }

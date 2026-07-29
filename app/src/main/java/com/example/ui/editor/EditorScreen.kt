@@ -58,8 +58,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
@@ -71,11 +74,17 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.NotificationsActive
+import androidx.compose.material.icons.rounded.RemoveDone
+import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TextSnippet
@@ -103,6 +112,7 @@ import androidx.compose.material.icons.rounded.Title
 import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -129,6 +139,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -141,6 +153,11 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -151,6 +168,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
@@ -162,6 +180,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -171,6 +190,7 @@ import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
 import com.example.data.export.ShareIO
+import com.example.data.share.NoteSharing
 import com.example.data.sync.DriveAuth
 import com.example.data.sync.DriveShare
 import com.google.android.gms.auth.api.identity.Identity
@@ -183,8 +203,12 @@ import com.example.domain.model.NoteType
 import com.example.ui.components.NeuIconButton
 import com.example.ui.components.BrandGradientButton
 import com.example.ui.components.TemplateIcons
+import com.example.ui.reminders.ReminderEditorSheet
+import com.example.ui.reminders.ReminderViewModel
+import com.example.ui.share.SharePassphraseDialog
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.NoteAccents
+import com.example.ui.util.responsiveHorizontalPadding
 import com.example.ui.theme.neumorphicRaised
 import java.io.File
 import java.util.UUID
@@ -214,8 +238,14 @@ fun EditorScreen(
     val driveConnected by viewModel.driveConnected.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
-    // Existing notes open read-only; new notes and template drafts open ready to edit.
+    // New notes and template drafts open ready to edit. Existing notes open read-only unless the
+    // user has turned on "open notes in edit mode" (applied once the note has loaded).
     var editing by remember { mutableStateOf(noteId == null) }
+    LaunchedEffect(state.id) {
+        if (noteId != null && state.id == noteId && !state.templateMode) {
+            editing = state.startInEditMode
+        }
+    }
     var showColorSheet by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     var showVoiceRecorder by remember { mutableStateOf(false) }
@@ -223,19 +253,34 @@ fun EditorScreen(
     var showTagSheet by remember { mutableStateOf(false) }
     var showTableDialog by remember { mutableStateOf(false) }
     var showShareSheet by remember { mutableStateOf(false) }
+    var showSharePassphrase by remember { mutableStateOf(false) }
+    var showReminderSheet by remember { mutableStateOf(false) }
+    val reminderVm: ReminderViewModel = viewModel()
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* A denied notification permission just suppresses the reminder banner silently. */ }
     var showExportSheet by remember { mutableStateOf(false) }
     var pendingExportFormat by remember { mutableStateOf<ExportFormat?>(null) }
     val checklistItems = remember { mutableStateListOf<UiChecklistItem>() }
+    var pendingChecklistFocusId by remember { mutableStateOf<String?>(null) }
     val blocks = remember { mutableStateListOf<EditorBlock>() }
     var focusedBlockId by remember { mutableStateOf<String?>(null) }
+    var pendingFocusBlockId by remember { mutableStateOf<String?>(null) }
+    // Whole-page freehand ink that overlays the note body (drawn with finger/stylus).
+    val inkStrokes = remember { mutableStateListOf<InkStroke>() }
+    var pageDrawMode by remember { mutableStateOf(false) }
+    var penColor by remember { mutableStateOf(0) }
+    var penWidthDp by remember { mutableStateOf(4f) }
     var cropImageBlock by remember { mutableStateOf<ImageBlock?>(null) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val contentSidePadding = responsiveHorizontalPadding()
     var pendingCameraFile by remember { mutableStateOf<File?>(null) }
 
     fun pushBlocks(immediate: Boolean) {
-        val text = serializeBlocks(blocks)
+        val body = serializeBlocks(blocks)
+        val text = if (inkStrokes.isEmpty()) body else body + "\n" + PageInk.encodeToken(inkStrokes)
         if (immediate) viewModel.commitContentNow(text) else viewModel.onContentChanged(text)
     }
 
@@ -259,8 +304,11 @@ fun EditorScreen(
     }
 
     // Insert a media block (image / audio) at the cursor, splitting the focused text block.
-    fun insertBlockAtCursor(media: EditorBlock) {
+    // When focusTrailing is set (tables/checklists), the caret jumps to the empty text line just
+    // below the inserted block instead of staying in the block above it.
+    fun insertBlockAtCursor(media: EditorBlock, focusTrailing: Boolean = false) {
         val idx = blocks.indexOfFirst { it.id == focusedBlockId }
+        val trailingId = newBlockId()
         if (idx >= 0 && blocks[idx] is TextBlock) {
             val tb = blocks[idx] as TextBlock
             val cursor = tb.value.selection.min.coerceIn(0, tb.value.text.length)
@@ -268,10 +316,14 @@ fun EditorScreen(
             val after = tb.value.text.substring(cursor)
             blocks[idx] = TextBlock(tb.id, TextFieldValue(before, TextRange(before.length)))
             blocks.add(idx + 1, media)
-            blocks.add(idx + 2, TextBlock(newBlockId(), TextFieldValue(after)))
+            blocks.add(idx + 2, TextBlock(trailingId, TextFieldValue(after)))
         } else {
             blocks.add(media)
-            blocks.add(TextBlock(newBlockId(), TextFieldValue("")))
+            blocks.add(TextBlock(trailingId, TextFieldValue("")))
+        }
+        if (focusTrailing) {
+            focusedBlockId = trailingId
+            pendingFocusBlockId = trailingId
         }
         pushBlocks(immediate = true)
     }
@@ -327,7 +379,7 @@ fun EditorScreen(
     }
 
     fun insertChecklistBlock() =
-        insertBlockAtCursor(ChecklistBlock(newBlockId(), listOf(ChecklistEntry(newBlockId(), "", false))))
+        insertBlockAtCursor(ChecklistBlock(newBlockId(), listOf(ChecklistEntry(newBlockId(), "", false))), focusTrailing = true)
 
     fun updateChecklistBlock(blockId: String, items: List<ChecklistEntry>) {
         if (items.isEmpty()) {
@@ -553,6 +605,25 @@ fun EditorScreen(
             }
     }
 
+    // Pack the note (+ attachments) into an encrypted .mynote file locked by [passphrase], then
+    // hand it to the system share sheet. Another MyNotes user imports it and enters the passphrase.
+    fun shareNoteEncrypted(passphrase: CharArray) {
+        val note = buildExportNote()
+        val fileName = "${Exporter.noteFileBase(note)}.${NoteSharing.FILE_EXTENSION}"
+        android.widget.Toast.makeText(context, "Encrypting…", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val uri = withContext(Dispatchers.IO) {
+                val bytes = NoteSharing.exportEncrypted(context, note, passphrase) ?: return@withContext null
+                ShareIO.writeShareFile(context, fileName, bytes)
+            }
+            if (uri != null) {
+                ShareIO.shareFile(context, uri, NoteSharing.MIME, note.title.ifBlank { "Note" })
+            } else {
+                android.widget.Toast.makeText(context, "Couldn't create share file", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // Seed the editable fields once the note has been loaded / created. Heavy parsing (a giant
     // note with hundreds of blocks) runs off the main thread; a loader appears only if it's slow
     // enough to notice, so ordinary notes open instantly with no flicker.
@@ -579,8 +650,10 @@ fun EditorScreen(
                 // These types parse inside their own editors.
             }
             else -> {
+                val body = PageInk.stripInk(state.content)
+                val ink = withContext(Dispatchers.Default) { PageInk.decode(state.content) }
                 val parsed = withContext(Dispatchers.Default) {
-                    parseContentToBlocks(state.content).toMutableList()
+                    parseContentToBlocks(body).toMutableList()
                 }
                 // Migrate legacy notes whose images were kept only in `attachments`.
                 if (parsed.none { it is ImageBlock } && state.attachments.isNotEmpty()) {
@@ -589,6 +662,8 @@ fun EditorScreen(
                         parsed.add(TextBlock(newBlockId(), TextFieldValue("")))
                     }
                 }
+                inkStrokes.clear()
+                inkStrokes.addAll(ink)
                 blocks.clear()
                 blocks.addAll(parsed)
                 focusedBlockId = parsed.firstOrNull { it is TextBlock }?.id
@@ -602,6 +677,52 @@ fun EditorScreen(
         viewModel.onContentChanged(
             ChecklistUtil.serialize(checklistItems.map { ChecklistItem(it.text, it.checked) })
         )
+    }
+
+    // Insert a fresh item right after [afterId] (or at the end) and focus it - used when the user
+    // presses Enter on a checklist row, so filling a list flows like Google Keep / Reminders.
+    fun addChecklistItemAfter(afterId: String?) {
+        val newItem = UiChecklistItem(UUID.randomUUID().toString(), "", false)
+        val i = checklistItems.indexOfFirst { it.id == afterId }
+        if (i >= 0) checklistItems.add(i + 1, newItem) else checklistItems.add(newItem)
+        pendingChecklistFocusId = newItem.id
+        pushChecklist()
+    }
+
+    // Backspace on an empty row removes it and moves the caret to the end of the previous row.
+    fun deleteChecklistItemFocusPrev(id: String) {
+        val i = checklistItems.indexOfFirst { it.id == id }
+        if (i < 0) return
+        val prevId = if (i > 0) checklistItems[i - 1].id else null
+        checklistItems.removeAt(i)
+        if (checklistItems.isEmpty()) {
+            val fresh = UiChecklistItem(UUID.randomUUID().toString(), "", false)
+            checklistItems.add(fresh)
+            pendingChecklistFocusId = fresh.id
+        } else {
+            pendingChecklistFocusId = prevId ?: checklistItems.firstOrNull()?.id
+        }
+        pushChecklist()
+    }
+
+    fun setAllChecklistChecked(checked: Boolean) {
+        for (i in checklistItems.indices) {
+            if (checklistItems[i].text.isNotBlank()) checklistItems[i] = checklistItems[i].copy(checked = checked)
+        }
+        pushChecklist()
+    }
+
+    fun clearCompletedChecklist() {
+        checklistItems.removeAll { it.checked && it.text.isNotBlank() }
+        if (checklistItems.isEmpty()) checklistItems.add(UiChecklistItem(UUID.randomUUID().toString(), "", false))
+        pushChecklist()
+    }
+
+    fun sortCheckedToBottom() {
+        val sorted = checklistItems.sortedBy { it.checked }
+        checklistItems.clear()
+        checklistItems.addAll(sorted)
+        pushChecklist()
     }
 
     val focusManager = LocalFocusManager.current
@@ -627,11 +748,13 @@ fun EditorScreen(
                 if (editing) {
                     focusManager.clearFocus(force = true)
                     viewModel.flush()
+                    pageDrawMode = false
                 }
                 editing = !editing
             },
             onShare = { showShareSheet = true },
             onExport = { showExportSheet = true },
+            onRemind = { showReminderSheet = true },
             onDelete = {
                 focusManager.clearFocus(force = true)
                 viewModel.deleteToTrash { onNavigateBack() }
@@ -651,6 +774,137 @@ fun EditorScreen(
                     onColor = { showColorSheet = true },
                     onEditTags = { showTagSheet = true },
                 )
+            }
+        }
+
+        // The scrolling note "header" (title + meta + progress) - shared by the virtualized path and
+        // the ink-overlay path so it looks identical either way.
+        val editorHeaderContent: @Composable () -> Unit = {
+            Column(Modifier.fillMaxWidth()) {
+                Spacer(Modifier.height(8.dp))
+                BasicTextField(
+                    value = titleField,
+                    onValueChange = {
+                        titleField = it
+                        viewModel.onTitleChanged(it.text)
+                    },
+                    textStyle = MaterialTheme.typography.headlineMedium.copy(
+                        color = MaterialTheme.colorScheme.onBackground,
+                        fontWeight = FontWeight.Bold,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    readOnly = LocalReadOnly.current,
+                    decorationBox = { inner ->
+                        if (titleField.text.isEmpty()) {
+                            Text(
+                                text = if (state.templateMode) "Template name" else "Title",
+                                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            )
+                        }
+                        inner()
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(10.dp))
+                if (state.templateMode) {
+                    TemplateIconRow(
+                        selected = state.iconKey,
+                        onSelect = viewModel::setTemplateIcon,
+                    )
+                } else {
+                    metaBar()
+                    Spacer(Modifier.height(12.dp))
+                    if (state.type == NoteType.CHECKLIST) {
+                        ChecklistProgress(
+                            done = checklistItems.count { it.checked && it.text.isNotBlank() },
+                            total = checklistItems.count { it.text.isNotBlank() },
+                            onCheckAll = { setAllChecklistChecked(true) },
+                            onUncheckAll = { setAllChecklistChecked(false) },
+                            onClearCompleted = { clearCompletedChecklist() },
+                            onSortChecked = { sortCheckedToBottom() },
+                        )
+                    } else {
+                        EditorMeta(
+                            words = state.wordCount,
+                            readingMinutes = state.readingMinutes,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+        }
+
+        // Renders one text-note block. Shared by the virtualized (LazyColumn) and ink (Column) paths.
+        val renderTextBlock: @Composable (Int, EditorBlock) -> Unit = { index, block ->
+            when (block) {
+                is TextBlock -> EditorTextBlock(
+                    value = block.value,
+                    showHint = blocks.size == 1 && block.value.text.isEmpty(),
+                    isLast = index == blocks.lastIndex,
+                    requestFocus = block.id == pendingFocusBlockId,
+                    onFocusHandled = { if (pendingFocusBlockId == block.id) pendingFocusBlockId = null },
+                    onValueChange = { onTextBlockChange(block.id, it) },
+                    onFocused = { focusedBlockId = block.id },
+                )
+
+                is ImageBlock -> {
+                    ResizableAttachmentImage(
+                        name = block.fileName,
+                        widthFraction = (block.widthPercent ?: 100) / 100f,
+                        onWidthChange = { pct -> resizeImageBlock(block.id, pct) },
+                        onRemove = { removeBlock(block.id) },
+                        onCrop = { cropImageBlock = block },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                is AudioBlock -> {
+                    AudioAttachment(
+                        name = block.fileName,
+                        onRemove = { removeBlock(block.id) },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                is ChecklistBlock -> {
+                    ChecklistBlockView(
+                        block = block,
+                        onChange = { items -> updateChecklistBlock(block.id, items) },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                is TableBlock -> {
+                    TableBlockView(
+                        block = block,
+                        onChange = { updated, immediate ->
+                            updateTableBlock(block.id, updated, immediate)
+                        },
+                        onRemove = { removeBlock(block.id) },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                is CalloutBlock -> {
+                    CalloutBlockView(
+                        block = block,
+                        onChange = { updated -> updateCalloutBlock(block.id, updated) },
+                        onRemove = { removeBlock(block.id) },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                is ScribbleBlock -> {
+                    ScribbleBlockView(
+                        block = block,
+                        onChange = { updated, immediate ->
+                            updateScribbleBlock(block.id, updated, immediate)
+                        },
+                        onRemove = { removeBlock(block.id) },
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
             }
         }
 
@@ -680,72 +934,19 @@ fun EditorScreen(
             else -> {
         if (showBodyLoader && !bodyReady) {
             EditorBodyLoader(modifier = Modifier.weight(1f).fillMaxWidth())
-        } else {
-        // A LazyColumn virtualises the note body, so a huge note (hundreds of blocks, scribbles,
-        // tables, checklists) only ever composes what's on screen - it can't jank or run out of memory.
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 22.dp),
-        ) {
-            item(key = "editor-header") {
-              Column(Modifier.fillMaxWidth()) {
-            Spacer(Modifier.height(8.dp))
-            BasicTextField(
-                value = titleField,
-                onValueChange = {
-                    titleField = it
-                    viewModel.onTitleChanged(it.text)
-                },
-                textStyle = MaterialTheme.typography.headlineMedium.copy(
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontWeight = FontWeight.Bold,
-                ),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                readOnly = LocalReadOnly.current,
-                decorationBox = { inner ->
-                    if (titleField.text.isEmpty()) {
-                        Text(
-                            text = if (state.templateMode) "Template name" else "Title",
-                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        )
-                    }
-                    inner()
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            Spacer(Modifier.height(10.dp))
-            if (state.templateMode) {
-                TemplateIconRow(
-                    selected = state.iconKey,
-                    onSelect = viewModel::setTemplateIcon,
-                )
-            } else {
-                metaBar()
-                Spacer(Modifier.height(12.dp))
-                if (state.type == NoteType.CHECKLIST) {
-                    ChecklistProgress(
-                        done = checklistItems.count { it.checked && it.text.isNotBlank() },
-                        total = checklistItems.count { it.text.isNotBlank() },
-                    )
-                } else {
-                    EditorMeta(
-                        words = state.wordCount,
-                        readingMinutes = state.readingMinutes,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-              }
-            }
-            if (state.type == NoteType.CHECKLIST) {
+        } else if (state.type == NoteType.CHECKLIST) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = contentSidePadding),
+            ) {
+                item(key = "editor-header") { editorHeaderContent() }
                 items(checklistItems, key = { it.id }) { item ->
                     ChecklistRow(
                         item = item,
+                        requestFocus = item.id == pendingChecklistFocusId,
+                        onFocusHandled = { if (pendingChecklistFocusId == item.id) pendingChecklistFocusId = null },
                         onToggle = {
                             val i = checklistItems.indexOfFirst { it.id == item.id }
                             if (i >= 0) {
@@ -767,6 +968,8 @@ fun EditorScreen(
                             }
                             pushChecklist()
                         },
+                        onImeNext = { addChecklistItemAfter(item.id) },
+                        onBackspaceEmpty = { deleteChecklistItemFocusPrev(item.id) },
                     )
                 }
                 item(key = "checklist-add") {
@@ -777,79 +980,58 @@ fun EditorScreen(
                         },
                     )
                 }
+                item(key = "editor-footer") { Spacer(Modifier.height(24.dp)) }
+            }
+        } else {
+            // Text note. Normally a LazyColumn virtualises the body (a huge note only composes what's
+            // on screen). When the user has drawn page ink - or turns on draw mode - we swap to a
+            // single scrolling Column so the ink overlay can map exactly to the content's scroll.
+            val inkActive = inkStrokes.isNotEmpty() || pageDrawMode
+            if (!inkActive) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = contentSidePadding),
+                ) {
+                    item(key = "editor-header") { editorHeaderContent() }
+                    itemsIndexed(blocks, key = { _, block -> block.id }) { index, block ->
+                        renderTextBlock(index, block)
+                    }
+                    item(key = "editor-footer") { Spacer(Modifier.height(24.dp)) }
+                }
             } else {
-                itemsIndexed(blocks, key = { _, block -> block.id }) { index, block ->
-                        when (block) {
-                            is TextBlock -> EditorTextBlock(
-                                value = block.value,
-                                showHint = blocks.size == 1 && block.value.text.isEmpty(),
-                                isLast = index == blocks.lastIndex,
-                                onValueChange = { onTextBlockChange(block.id, it) },
-                                onFocused = { focusedBlockId = block.id },
-                            )
-
-                            is ImageBlock -> {
-                                ResizableAttachmentImage(
-                                    name = block.fileName,
-                                    widthFraction = (block.widthPercent ?: 100) / 100f,
-                                    onWidthChange = { pct -> resizeImageBlock(block.id, pct) },
-                                    onRemove = { removeBlock(block.id) },
-                                    onCrop = { cropImageBlock = block },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
-
-                            is AudioBlock -> {
-                                AudioAttachment(
-                                    name = block.fileName,
-                                    onRemove = { removeBlock(block.id) },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
-
-                            is ChecklistBlock -> {
-                                ChecklistBlockView(
-                                    block = block,
-                                    onChange = { items -> updateChecklistBlock(block.id, items) },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
-
-                            is TableBlock -> {
-                                TableBlockView(
-                                    block = block,
-                                    onChange = { updated, immediate ->
-                                        updateTableBlock(block.id, updated, immediate)
-                                    },
-                                    onRemove = { removeBlock(block.id) },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
-
-                            is CalloutBlock -> {
-                                CalloutBlockView(
-                                    block = block,
-                                    onChange = { updated -> updateCalloutBlock(block.id, updated) },
-                                    onRemove = { removeBlock(block.id) },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
-
-                            is ScribbleBlock -> {
-                                ScribbleBlockView(
-                                    block = block,
-                                    onChange = { updated, immediate ->
-                                        updateScribbleBlock(block.id, updated, immediate)
-                                    },
-                                    onRemove = { removeBlock(block.id) },
-                                )
-                                Spacer(Modifier.height(12.dp))
-                            }
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                ) {
+                    val inkScroll = rememberScrollState()
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(inkScroll)
+                            .padding(horizontal = contentSidePadding),
+                    ) {
+                        editorHeaderContent()
+                        blocks.forEachIndexed { index, block ->
+                            key(block.id) { renderTextBlock(index, block) }
                         }
+                        Spacer(Modifier.height(24.dp))
+                    }
+                    PageInkLayer(
+                        strokes = inkStrokes,
+                        drawEnabled = pageDrawMode && editing,
+                        penColor = penColor,
+                        penWidthDp = penWidthDp,
+                        scrollState = inkScroll,
+                        onCommitStroke = {
+                            inkStrokes.add(it)
+                            pushBlocks(immediate = true)
+                        },
+                    )
                 }
             }
-            item(key = "editor-footer") { Spacer(Modifier.height(24.dp)) }
-        }
         }
 
         if (state.templateMode) {
@@ -863,20 +1045,50 @@ fun EditorScreen(
         }
 
         if (editing && state.type != NoteType.CHECKLIST) {
-            FormattingToolbar(
-                onImage = { showImagePicker = true },
-                onVoice = { startVoiceNote() },
-                onScribble = { insertScribbleBlock() },
-                onHeading = { prefix -> editFocusedBlock { prefixLine(it, prefix) } },
-                onFormat = { token -> editFocusedBlock { wrapSelection(it, token) } },
-                onBullet = { editFocusedBlock { prefixLine(it, "- ") } },
-                onNumbered = { editFocusedBlock { prefixLine(it, "1. ") } },
-                onChecklist = { insertChecklistBlock() },
-                onWrap = { open, close -> editFocusedBlock { surround(it, open, close) } },
-                onDivider = { editFocusedBlock { insert(it, "\n\n--------------------\n\n") } },
-                onTable = { showTableDialog = true },
-                onCallout = { insertCalloutBlock() },
-            )
+            // On wide screens keep the toolbar aligned with the centred body; phones get 0 extra.
+            val toolbarInset = if (contentSidePadding > 22.dp) contentSidePadding - 16.dp else 0.dp
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = toolbarInset)) {
+            if (pageDrawMode) {
+                PageInkToolbar(
+                    penColor = penColor,
+                    penWidthDp = penWidthDp,
+                    onPenColor = { penColor = it },
+                    onPenWidth = { penWidthDp = it },
+                    onUndo = {
+                        if (inkStrokes.isNotEmpty()) {
+                            inkStrokes.removeAt(inkStrokes.lastIndex)
+                            pushBlocks(immediate = true)
+                        }
+                    },
+                    onClear = {
+                        if (inkStrokes.isNotEmpty()) {
+                            inkStrokes.clear()
+                            pushBlocks(immediate = true)
+                        }
+                    },
+                    onDone = { pageDrawMode = false },
+                )
+            } else {
+                FormattingToolbar(
+                    onImage = { showImagePicker = true },
+                    onVoice = { startVoiceNote() },
+                    onDraw = {
+                        focusManager.clearFocus(force = true)
+                        pageDrawMode = true
+                    },
+                    onHeading = { prefix -> editFocusedBlock { prefixLine(it, prefix) } },
+                    onFormat = { token -> editFocusedBlock { wrapSelection(it, token) } },
+                    onBullet = { editFocusedBlock { prefixLine(it, "- ") } },
+                    onNumbered = { editFocusedBlock { prefixLine(it, "1. ") } },
+                    onChecklist = { insertChecklistBlock() },
+                    onWrap = { open, close -> editFocusedBlock { surround(it, open, close) } },
+                    onDivider = { editFocusedBlock { insert(it, "\n\n--------------------\n\n") } },
+                    onTable = { showTableDialog = true },
+                    onCallout = { insertCalloutBlock() },
+                    onSketch = { insertScribbleBlock() },
+                )
+            }
+            }
         }
         }
         }
@@ -899,8 +1111,39 @@ fun EditorScreen(
             onShareText = { showShareSheet = false; shareNoteText() },
             onSharePdf = { showShareSheet = false; shareNoteFile(ExportFormat.PDF) },
             onShareMarkdown = { showShareSheet = false; shareNoteFile(ExportFormat.MD) },
+            onShareEncrypted = { showShareSheet = false; showSharePassphrase = true },
             onShareDriveLink = if (driveConnected) ({ showShareSheet = false; shareDriveLink() }) else null,
             onDismiss = { showShareSheet = false },
+        )
+    }
+
+    if (showSharePassphrase) {
+        SharePassphraseDialog(
+            onConfirm = { passphrase ->
+                showSharePassphrase = false
+                shareNoteEncrypted(passphrase)
+            },
+            onDismiss = { showSharePassphrase = false },
+        )
+    }
+
+    if (showReminderSheet) {
+        ReminderEditorSheet(
+            initial = null,
+            prefillTitle = state.title.ifBlank { "Note reminder" },
+            prefillNoteId = state.id,
+            onSave = { reminder ->
+                showReminderSheet = false
+                // Persist the note first so the reminder's link resolves when tapped.
+                viewModel.flush()
+                reminderVm.save(context, reminder)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                android.widget.Toast.makeText(context, "Reminder set", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            onDelete = null,
+            onDismiss = { showReminderSheet = false },
         )
     }
 
@@ -980,7 +1223,7 @@ fun EditorScreen(
     if (showTableDialog) {
         TableSizeDialog(
             onCreate = { rows, cols ->
-                insertBlockAtCursor(emptyTable(rows, cols))
+                insertBlockAtCursor(emptyTable(rows, cols), focusTrailing = true)
                 showTableDialog = false
             },
             onDismiss = { showTableDialog = false },
@@ -1008,6 +1251,7 @@ private fun EditorTopBar(
     onToggleEdit: () -> Unit,
     onShare: () -> Unit,
     onExport: () -> Unit,
+    onRemind: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Row(
@@ -1043,7 +1287,7 @@ private fun EditorTopBar(
                 tint = if (editing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(10.dp))
-            EditorOverflowMenu(onShare = onShare, onExport = onExport, onDelete = onDelete)
+            EditorOverflowMenu(onShare = onShare, onExport = onExport, onRemind = onRemind, onDelete = onDelete)
         }
     }
 }
@@ -1053,6 +1297,7 @@ private fun EditorTopBar(
 private fun EditorOverflowMenu(
     onShare: () -> Unit,
     onExport: () -> Unit,
+    onRemind: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -1103,6 +1348,7 @@ private fun EditorOverflowMenu(
                     },
                     onShare = { open = false; onShare() },
                     onExport = { open = false; onExport() },
+                    onRemind = { open = false; onRemind() },
                     onDelete = { open = false; onDelete() },
                 )
             }
@@ -1116,6 +1362,7 @@ private fun OverflowMenuCard(
     modifier: Modifier = Modifier,
     onShare: () -> Unit,
     onExport: () -> Unit,
+    onRemind: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
@@ -1136,6 +1383,11 @@ private fun OverflowMenuCard(
                 icon = Icons.Rounded.Share,
                 label = "Share",
                 onClick = onShare,
+            )
+            OverflowMenuRow(
+                icon = Icons.Rounded.NotificationsActive,
+                label = "Remind me",
+                onClick = onRemind,
             )
             OverflowMenuRow(
                 icon = Icons.Rounded.FileDownload,
@@ -1510,7 +1762,7 @@ private val wrapStyles = listOf(
 private fun FormattingToolbar(
     onImage: () -> Unit,
     onVoice: () -> Unit,
-    onScribble: () -> Unit,
+    onDraw: () -> Unit,
     onHeading: (prefix: String) -> Unit,
     onFormat: (token: String) -> Unit,
     onBullet: () -> Unit,
@@ -1520,6 +1772,7 @@ private fun FormattingToolbar(
     onDivider: () -> Unit,
     onTable: () -> Unit,
     onCallout: () -> Unit,
+    onSketch: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
     var listStyle by remember { mutableStateOf(ListStyle.BULLET) }
@@ -1550,7 +1803,7 @@ private fun FormattingToolbar(
         Spacer(Modifier.width(6.dp))
         ToolbarAccentButton(Icons.Rounded.Mic, "Record voice note", onVoice)
         Spacer(Modifier.width(6.dp))
-        ToolbarAccentButton(Icons.Rounded.Gesture, "Scribble", onScribble)
+        ToolbarAccentButton(Icons.Rounded.Draw, "Draw on page", onDraw)
         ToolbarDivider()
         ToolbarMenuButton(
             description = headingStyle.label,
@@ -1621,6 +1874,7 @@ private fun FormattingToolbar(
         }
         ToolbarButton(Icons.Rounded.HorizontalRule, "Divider", onDivider)
         ToolbarButton(Icons.Rounded.TableChart, "Table", onTable)
+        ToolbarButton(Icons.Rounded.Gesture, "Sketch box", onSketch)
         ToolbarButton(Icons.Rounded.Lightbulb, "Callout", onCallout)
     }
 }
@@ -1821,6 +2075,7 @@ private fun ShareOptionsSheet(
     onShareText: () -> Unit,
     onSharePdf: () -> Unit,
     onShareMarkdown: () -> Unit,
+    onShareEncrypted: () -> Unit,
     onDismiss: () -> Unit,
     onShareDriveLink: (() -> Unit)? = null,
 ) {
@@ -1852,6 +2107,7 @@ private fun ShareOptionsSheet(
             SheetOptionRow(Icons.Rounded.Share, "Share as text", "Send the note's text to another app", onShareText)
             SheetOptionRow(Icons.Rounded.PictureAsPdf, "Share as PDF", "Attach a PDF copy", onSharePdf)
             SheetOptionRow(Icons.Rounded.Description, "Share as Markdown", "Attach a .md copy", onShareMarkdown)
+            SheetOptionRow(Icons.Rounded.Lock, "Share encrypted", "Locked with a passphrase - open it inside MyNotes", onShareEncrypted)
             if (onShareDriveLink != null) {
                 SheetOptionRow(Icons.Rounded.Link, "Share a link", "Anyone with the link can view (via Google Drive)", onShareDriveLink)
             }
@@ -2138,6 +2394,8 @@ private fun EditorTextBlock(
     value: TextFieldValue,
     showHint: Boolean,
     isLast: Boolean,
+    requestFocus: Boolean,
+    onFocusHandled: () -> Unit,
     onValueChange: (TextFieldValue) -> Unit,
     onFocused: () -> Unit,
 ) {
@@ -2145,6 +2403,13 @@ private fun EditorTextBlock(
     val highlightColor = MaterialTheme.colorScheme.tertiaryContainer
     val transformation = remember(markerColor, highlightColor) {
         markdownVisualTransformation(markerColor, highlightColor)
+    }
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(requestFocus) {
+        if (requestFocus) {
+            runCatching { focusRequester.requestFocus() }
+            onFocusHandled()
+        }
     }
     BasicTextField(
         value = value,
@@ -2168,6 +2433,7 @@ private fun EditorTextBlock(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = if (isLast) 220.dp else 44.dp)
+            .focusRequester(focusRequester)
             .onFocusChanged { if (it.isFocused) onFocused() },
     )
 }
@@ -2382,16 +2648,84 @@ private data class UiChecklistItem(
 )
 
 @Composable
-private fun ChecklistProgress(done: Int, total: Int) {
-    Text(
-        text = when {
-            total == 0 -> "No items yet"
-            done == total -> "All $total done 🎉"
-            else -> "$done of $total done"
-        },
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
+private fun ChecklistProgress(
+    done: Int,
+    total: Int,
+    onCheckAll: () -> Unit,
+    onUncheckAll: () -> Unit,
+    onClearCompleted: () -> Unit,
+    onSortChecked: () -> Unit,
+) {
+    val readOnly = LocalReadOnly.current
+    val fraction = if (total == 0) 0f else done / total.toFloat()
+    val animated by animateFloatAsState(targetValue = fraction, label = "checklistProgress")
+    val allDone = total > 0 && done == total
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = when {
+                    total == 0 -> "No items yet"
+                    allDone -> "All $total done 🎉"
+                    else -> "$done of $total done · ${(fraction * 100).toInt()}%"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (allDone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            if (!readOnly && total > 0) {
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .clickable { menu = true },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.MoreVert,
+                            contentDescription = "Checklist actions",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Check all") },
+                            leadingIcon = { Icon(Icons.Rounded.DoneAll, contentDescription = null) },
+                            onClick = { menu = false; onCheckAll() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Uncheck all") },
+                            leadingIcon = { Icon(Icons.Rounded.RemoveDone, contentDescription = null) },
+                            onClick = { menu = false; onUncheckAll() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Move done to bottom") },
+                            leadingIcon = { Icon(Icons.Rounded.Sort, contentDescription = null) },
+                            onClick = { menu = false; onSortChecked() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Clear completed") },
+                            leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
+                            onClick = { menu = false; onClearCompleted() },
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        LinearProgressIndicator(
+            progress = { animated },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(RoundedCornerShape(50)),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+        )
+    }
 }
 
 @Composable
@@ -2428,8 +2762,19 @@ private fun ChecklistRow(
     onToggle: () -> Unit,
     onTextChange: (String) -> Unit,
     onDelete: () -> Unit,
+    requestFocus: Boolean = false,
+    onFocusHandled: () -> Unit = {},
+    onImeNext: (() -> Unit)? = null,
+    onBackspaceEmpty: (() -> Unit)? = null,
 ) {
     val readOnly = LocalReadOnly.current
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(requestFocus) {
+        if (requestFocus) {
+            runCatching { focusRequester.requestFocus() }
+            onFocusHandled()
+        }
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -2469,7 +2814,21 @@ private fun ChecklistRow(
             ),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             readOnly = readOnly,
-            modifier = Modifier.weight(1f),
+            singleLine = onImeNext != null,
+            keyboardOptions = if (onImeNext != null) KeyboardOptions(imeAction = ImeAction.Next) else KeyboardOptions.Default,
+            keyboardActions = if (onImeNext != null) KeyboardActions(onNext = { onImeNext() }) else KeyboardActions.Default,
+            modifier = Modifier
+                .weight(1f)
+                .focusRequester(focusRequester)
+                .onPreviewKeyEvent { e ->
+                    if (onBackspaceEmpty != null && e.type == KeyEventType.KeyDown &&
+                        e.key == Key.Backspace && item.text.isEmpty()
+                    ) {
+                        onBackspaceEmpty(); true
+                    } else {
+                        false
+                    }
+                },
             decorationBox = { inner ->
                 if (item.text.isEmpty()) {
                     Text(
@@ -2507,6 +2866,7 @@ private fun ChecklistBlockView(
 ) {
     val neu = LocalNeuColors.current
     val readOnly = LocalReadOnly.current
+    var pendingFocusId by remember { mutableStateOf<String?>(null) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2519,6 +2879,8 @@ private fun ChecklistBlockView(
             key(item.id) {
                 ChecklistRow(
                     item = UiChecklistItem(item.id, item.text, item.checked),
+                    requestFocus = item.id == pendingFocusId,
+                    onFocusHandled = { if (pendingFocusId == item.id) pendingFocusId = null },
                     onToggle = {
                         onChange(block.items.map { if (it.id == item.id) it.copy(checked = !it.checked) else it })
                     },
@@ -2528,6 +2890,22 @@ private fun ChecklistBlockView(
                     onDelete = {
                         onChange(block.items.filterNot { it.id == item.id })
                     },
+                    onImeNext = {
+                        val newId = newBlockId()
+                        val idx = block.items.indexOfFirst { it.id == item.id }
+                        val newList = block.items.toMutableList().also {
+                            it.add(if (idx >= 0) idx + 1 else it.size, ChecklistEntry(newId, "", false))
+                        }
+                        pendingFocusId = newId
+                        onChange(newList)
+                    },
+                    onBackspaceEmpty = {
+                        val idx = block.items.indexOfFirst { it.id == item.id }
+                        val prevId = if (idx > 0) block.items[idx - 1].id else null
+                        val newList = block.items.filterNot { it.id == item.id }
+                        pendingFocusId = prevId
+                        onChange(newList)
+                    },
                 )
             }
         }
@@ -2536,7 +2914,11 @@ private fun ChecklistBlockView(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(10.dp))
-                .clickable(enabled = !readOnly) { onChange(block.items + ChecklistEntry(newBlockId(), "", false)) }
+                .clickable(enabled = !readOnly) {
+                    val newId = newBlockId()
+                    pendingFocusId = newId
+                    onChange(block.items + ChecklistEntry(newId, "", false))
+                }
                 .padding(vertical = 6.dp, horizontal = 4.dp),
         ) {
             Icon(

@@ -23,6 +23,7 @@ object AttachmentMarkup {
     private val TABLE = Regex("""\[\[table:[A-Za-z0-9+/=]+]]""")
     private val CALLOUT = Regex("""\[\[callout:[A-Za-z0-9+/=]+]]""")
     private val SCRIBBLE = Regex("""\[\[scribble:[A-Za-z0-9+/=]+]]""")
+    private val INK = Regex("""\[\[ink:[A-Za-z0-9+/=]+]]""")
 
     /** The inline token for an image, optionally with a display width percent (10-100). */
     fun imageToken(fileName: String, widthPercent: Int? = null): String =
@@ -53,4 +54,5 @@ object AttachmentMarkup {
         .replace(TABLE, " ")
         .replace(CALLOUT, " ")
         .replace(SCRIBBLE, " ")
+        .replace(INK, " ")
 }

@@ -1,11 +1,16 @@
 package com.example.data.sync
 
+import android.content.Context
 import com.example.data.repository.FolderRepository
 import com.example.data.repository.NoteRepository
+import com.example.data.repository.ReminderRepository
 import com.example.data.security.EncryptionManager
 import com.example.data.settings.SettingsRepository
+import com.example.domain.model.CustomTemplate
 import com.example.domain.model.Note
 import com.example.domain.model.NoteType
+import com.example.domain.model.Reminder
+import com.example.domain.model.ReminderRepeat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -31,6 +36,8 @@ class CloudSyncManager(
     private val settings: SettingsRepository,
     private val noteRepository: NoteRepository,
     private val folderRepository: FolderRepository,
+    private val reminderRepository: ReminderRepository,
+    private val appContext: Context,
 ) {
 
     enum class RemoteState { NO_ENVELOPE, HAS_ENVELOPE, ERROR }
@@ -141,6 +148,7 @@ class CloudSyncManager(
         settings.setDriveFolderId(null)
         settings.setRecoveryConfigured(false)
         settings.setSyncedNoteIds(emptySet())
+        settings.setSyncedReminderIds(emptySet())
     }
 
     private val syncMutex = Mutex()
@@ -206,6 +214,8 @@ class CloudSyncManager(
                 }
             }
             settings.setSyncedNoteIds(newBase)
+            syncTemplates(accessToken, dek)
+            syncReminders(accessToken, dek)
             settings.setLastSyncedAt(System.currentTimeMillis())
             SyncOutcome.Success(pushed, pulled, deletedLocal, deletedRemote)
         } catch (e: Exception) {
@@ -239,6 +249,182 @@ class CloudSyncManager(
         noteRepository.importFromSync(note, validFolderIds)
         return true
     }
+
+    /**
+     * Backs up and merges the user's custom templates. Templates are a small global list, so the
+     * whole set is stored as one encrypted file in Drive's hidden appDataFolder. Merge is
+     * last-write-wins per template id (using updatedAt / trashedAt), so creating, editing, trashing
+     * or restoring a template on one device propagates to the others. Best-effort: a failure here
+     * never fails the note sync.
+     */
+    private suspend fun syncTemplates(accessToken: String, dek: ByteArray) {
+        try {
+            val local = settings.allTemplatesForSync()
+            val remoteFileId = DriveRest.findAppDataFile(accessToken, TEMPLATES_NAME)
+            val remote: List<CustomTemplate> = remoteFileId?.let { fid ->
+                DriveRest.downloadText(accessToken, fid)?.let { b64 ->
+                    SyncCrypto.decrypt(SyncCrypto.decodeBase64(b64), dek)?.let { bytes ->
+                        templatesFromJson(String(bytes, Charsets.UTF_8))
+                    }
+                }
+            } ?: emptyList()
+
+            val merged = mergeTemplates(local, remote)
+            if (merged.toSet() != local.toSet()) settings.replaceAllTemplates(merged)
+            if (remoteFileId == null || merged.toSet() != remote.toSet()) {
+                val blob = SyncCrypto.encodeBase64(
+                    SyncCrypto.encrypt(templatesToJson(merged).toByteArray(Charsets.UTF_8), dek),
+                )
+                DriveRest.upsertAppDataFile(accessToken, TEMPLATES_NAME, blob)
+            }
+        } catch (e: Exception) {
+            // Best-effort - note sync already succeeded.
+        }
+    }
+
+    private fun templateStamp(t: CustomTemplate): Long = maxOf(t.updatedAt, t.trashedAt ?: 0L)
+
+    private fun mergeTemplates(local: List<CustomTemplate>, remote: List<CustomTemplate>): List<CustomTemplate> {
+        val byId = LinkedHashMap<String, CustomTemplate>()
+        (local + remote).forEach { t ->
+            val existing = byId[t.id]
+            if (existing == null || templateStamp(t) >= templateStamp(existing)) byId[t.id] = t
+        }
+        return byId.values.toList()
+    }
+
+    /**
+     * Backs up and merges reminders. Like templates, the whole set is one encrypted file in Drive's
+     * hidden appDataFolder ([REMINDERS_NAME]); merge is last-write-wins per reminder id via
+     * [Reminder.updatedAt], and a persisted merge base ([SettingsRepository.syncedReminderIds])
+     * tells a real deletion apart from a reminder that simply hasn't reached this device yet. Pulled
+     * reminders are re-armed with AlarmManager so they actually fire here. Best-effort: a failure
+     * here never fails the note sync.
+     */
+    private suspend fun syncReminders(accessToken: String, dek: ByteArray) {
+        try {
+            val local = reminderRepository.allForSync()
+            val localById = local.associateBy { it.id }
+            val remoteFileId = DriveRest.findAppDataFile(accessToken, REMINDERS_NAME)
+            val remote: List<Reminder> = remoteFileId?.let { fid ->
+                DriveRest.downloadText(accessToken, fid)?.let { b64 ->
+                    SyncCrypto.decrypt(SyncCrypto.decodeBase64(b64), dek)?.let { bytes ->
+                        remindersFromJson(String(bytes, Charsets.UTF_8))
+                    }
+                }
+            } ?: emptyList()
+            val remoteById = remote.associateBy { it.id }
+            val base = settings.syncedReminderIds()
+
+            val allIds = HashSet<String>().apply {
+                addAll(localById.keys); addAll(remoteById.keys); addAll(base)
+            }
+            val merged = ArrayList<Reminder>()
+            val deleteLocal = ArrayList<String>()
+            val newBase = HashSet<String>()
+            for (id in allIds) {
+                val l = localById[id]
+                val r = remoteById[id]
+                val inBase = id in base
+                when {
+                    l != null && r != null -> {
+                        merged.add(if (l.updatedAt >= r.updatedAt) l else r); newBase.add(id)
+                    }
+                    l != null && r == null ->
+                        if (inBase) deleteLocal.add(id) // deleted on another device
+                        else { merged.add(l); newBase.add(id) } // new here -> keep & push
+                    l == null && r != null ->
+                        if (!inBase) { merged.add(r); newBase.add(id) } // new remotely -> pull
+                    // else: only in base -> gone from both sides, drop it.
+                }
+            }
+
+            // Only touch local rows that actually changed (avoids re-encrypt churn + UI thrash).
+            val upserts = merged.filter { localById[it.id] != it }
+            if (upserts.isNotEmpty() || deleteLocal.isNotEmpty()) {
+                reminderRepository.applySyncedSet(appContext, upserts, deleteLocal)
+            }
+            settings.setSyncedReminderIds(newBase)
+
+            if (remoteFileId == null || merged.toSet() != remote.toSet()) {
+                val blob = SyncCrypto.encodeBase64(
+                    SyncCrypto.encrypt(remindersToJson(merged).toByteArray(Charsets.UTF_8), dek),
+                )
+                DriveRest.upsertAppDataFile(accessToken, REMINDERS_NAME, blob)
+            }
+        } catch (e: Exception) {
+            // Best-effort - note sync already succeeded.
+        }
+    }
+
+    private fun remindersToJson(items: List<Reminder>): String {
+        val arr = JSONArray()
+        items.forEach {
+            val o = JSONObject()
+                .put("id", it.id)
+                .put("title", it.title)
+                .put("body", it.body)
+                .put("noteId", it.noteId ?: JSONObject.NULL)
+                .put("triggerAt", it.triggerAt)
+                .put("repeat", it.repeat.name)
+                .put("enabled", it.enabled)
+                .put("createdAt", it.createdAt)
+                .put("updatedAt", it.updatedAt)
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    private fun remindersFromJson(text: String): List<Reminder> = runCatching {
+        val arr = JSONArray(text)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.getJSONObject(i)
+            val id = o.optString("id")
+            if (id.isBlank()) return@mapNotNull null
+            Reminder(
+                id = id,
+                title = o.optString("title"),
+                body = o.optString("body"),
+                noteId = if (o.isNull("noteId")) null else o.optString("noteId").ifBlank { null },
+                triggerAt = o.optLong("triggerAt"),
+                repeat = runCatching { ReminderRepeat.valueOf(o.optString("repeat")) }
+                    .getOrDefault(ReminderRepeat.NONE),
+                enabled = o.optBoolean("enabled", true),
+                createdAt = o.optLong("createdAt"),
+                updatedAt = o.optLong("updatedAt", o.optLong("createdAt")),
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun templatesToJson(items: List<CustomTemplate>): String {
+        val arr = JSONArray()
+        items.forEach {
+            val o = JSONObject()
+                .put("id", it.id)
+                .put("name", it.name)
+                .put("icon", it.iconKey)
+                .put("content", it.content)
+                .put("updatedAt", it.updatedAt)
+            if (it.trashedAt != null) o.put("trashedAt", it.trashedAt)
+            arr.put(o)
+        }
+        return arr.toString()
+    }
+
+    private fun templatesFromJson(text: String): List<CustomTemplate> = runCatching {
+        val arr = JSONArray(text)
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            CustomTemplate(
+                id = o.optString("id"),
+                name = o.optString("name"),
+                iconKey = o.optString("icon", "note"),
+                content = o.optString("content"),
+                trashedAt = if (o.has("trashedAt") && !o.isNull("trashedAt")) o.optLong("trashedAt") else null,
+                updatedAt = o.optLong("updatedAt", 0L),
+            )
+        }
+    }.getOrDefault(emptyList())
 
     private fun noteToJson(n: Note): String = JSONObject()
         .put("id", n.id)
@@ -289,5 +475,7 @@ class CloudSyncManager(
         private const val ENVELOPE_NAME = "mynotes.key.json"
         private const val ENVELOPE_VERSION = 1
         private const val FOLDER_NAME = "MyNotes"
+        private const val TEMPLATES_NAME = "mynotes.templates.json"
+        private const val REMINDERS_NAME = "mynotes.reminders.json"
     }
 }

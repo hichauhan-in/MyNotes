@@ -111,6 +111,11 @@ class HomeViewModel : ViewModel() {
         .map { it.defaultExportFolder }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
+    /** When true, a horizontal swipe on the home screen switches between filter tabs. */
+    val swipeNavigationEnabled: StateFlow<Boolean> = settings.settings
+        .map { it.swipeNavigationEnabled }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     /** One-time "connect Google Drive?" prompt: shown after onboarding until acted on / not connected. */
     val showSyncPrompt: StateFlow<Boolean> = settings.settings
         .map { it.onboardingComplete && !it.syncPrompted && it.driveAccountEmail == null }
@@ -140,6 +145,11 @@ class HomeViewModel : ViewModel() {
 
     /** Every note snapshot, exposed for book export traversal. */
     val notesForExport: StateFlow<List<Note>> get() = allNotesSnapshot
+
+    /** Persist a note decrypted from an imported .mynote share file. */
+    fun saveImportedNote(note: Note) = viewModelScope.launch {
+        repository.saveNote(note)
+    }
 
     fun addCustomTemplate(name: String, iconKey: String, content: String) = viewModelScope.launch {
         settings.addTemplate(CustomTemplate(name = name, iconKey = iconKey, content = content))
@@ -301,6 +311,14 @@ class HomeViewModel : ViewModel() {
         _currentFolderId.value = null
         clearSelection()
         clearBookSelection()
+    }
+
+    /** Move to the next/previous filter tab - used by the optional home swipe gesture. */
+    fun cycleFilter(forward: Boolean) {
+        val values = NoteFilter.entries
+        val idx = values.indexOf(_filter.value).coerceAtLeast(0)
+        val next = if (forward) (idx + 1) % values.size else (idx - 1 + values.size) % values.size
+        onFilterChanged(values[next])
     }
 
     /** The book new notes should be created in, given the current context. */

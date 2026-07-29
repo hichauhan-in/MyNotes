@@ -1,5 +1,6 @@
 package com.example.ui.editor
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,6 +27,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowForward
 import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Check
@@ -69,11 +72,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
+import com.example.ui.util.responsiveHorizontalPadding
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.NumberFormat
@@ -103,7 +110,19 @@ private data class ExpAccount(
     val sections: List<ExpSection>,
 )
 
-private data class ExpenseModel(val accounts: List<ExpAccount>)
+/** A saved, repeatable money move between two accounts. Tapping "Transfer" applies it. */
+private data class ExpTransfer(
+    val id: String,
+    val name: String,
+    val fromId: String,
+    val toId: String,
+    val amount: Double,
+)
+
+private data class ExpenseModel(
+    val accounts: List<ExpAccount>,
+    val transfers: List<ExpTransfer> = emptyList(),
+)
 
 private fun newItem() = ExpItem(UUID.randomUUID().toString(), "", 0.0)
 
@@ -114,11 +133,26 @@ private fun parseExpense(content: String): ExpenseModel = runCatching {
     if (content.isBlank()) return@runCatching ExpenseModel(emptyList())
     val obj = JSONObject(content)
     if (obj.optInt("version", 1) >= 2 && obj.has("accounts")) {
-        parseAccounts(obj.getJSONArray("accounts"))
+        val accounts = parseAccounts(obj.getJSONArray("accounts")).accounts
+        ExpenseModel(accounts, parseTransfers(obj.optJSONArray("transfers")))
     } else {
         migrateOld(obj)
     }
 }.getOrDefault(ExpenseModel(emptyList()))
+
+private fun parseTransfers(arr: JSONArray?): List<ExpTransfer> {
+    if (arr == null) return emptyList()
+    return (0 until arr.length()).map { i ->
+        val o = arr.getJSONObject(i)
+        ExpTransfer(
+            o.optString("id", UUID.randomUUID().toString()),
+            o.optString("name"),
+            o.optString("from"),
+            o.optString("to"),
+            o.optDouble("amount", 0.0),
+        )
+    }
+}
 
 private fun parseAccounts(arr: JSONArray): ExpenseModel {
     val accounts = (0 until arr.length()).map { i ->
@@ -232,7 +266,14 @@ private fun serializeExpense(model: ExpenseModel): String {
                 .put("balance", a.balance).put("tags", tagsArr).put("sections", secArr),
         )
     }
-    return JSONObject().put("version", 2).put("accounts", accArr).toString()
+    val transfersArr = JSONArray()
+    model.transfers.forEach { t ->
+        transfersArr.put(
+            JSONObject().put("id", t.id).put("name", t.name)
+                .put("from", t.fromId).put("to", t.toId).put("amount", t.amount),
+        )
+    }
+    return JSONObject().put("version", 3).put("accounts", accArr).put("transfers", transfersArr).toString()
 }
 
 private val sectionIconOptions: List<Pair<String, ImageVector>> = listOf(
@@ -306,6 +347,7 @@ internal fun ExpenseEditor(
     var showTransfer by remember { mutableStateOf(false) }
     var showAddSection by remember { mutableStateOf(false) }
     val readOnly = LocalReadOnly.current
+    val context = LocalContext.current
 
     fun update(m: ExpenseModel) {
         model = m
@@ -315,6 +357,42 @@ internal fun ExpenseEditor(
         update(model.copy(accounts = model.accounts.map { if (it.id == id) transform(it) else it }))
     fun updateSection(accId: String, secId: String, transform: (ExpSection) -> ExpSection) =
         updateAccount(accId) { a -> a.copy(sections = a.sections.map { if (it.id == secId) transform(it) else it }) }
+    fun updateTransfer(id: String, transform: (ExpTransfer) -> ExpTransfer) =
+        update(model.copy(transfers = model.transfers.map { if (it.id == id) transform(it) else it }))
+    fun addTransfer() {
+        val from = model.accounts.getOrNull(0)?.id.orEmpty()
+        val to = model.accounts.getOrNull(1)?.id ?: model.accounts.getOrNull(0)?.id.orEmpty()
+        update(model.copy(transfers = model.transfers + ExpTransfer(UUID.randomUUID().toString(), "", from, to, 0.0)))
+    }
+    fun removeTransfer(id: String) = update(model.copy(transfers = model.transfers.filterNot { it.id == id }))
+    fun executeTransfer(t: ExpTransfer) {
+        val from = model.accounts.firstOrNull { it.id == t.fromId }
+        val to = model.accounts.firstOrNull { it.id == t.toId }
+        when {
+            from == null || to == null || from.id == to.id ->
+                Toast.makeText(context, "Pick two different accounts", Toast.LENGTH_SHORT).show()
+            t.amount <= 0.0 ->
+                Toast.makeText(context, "Enter an amount to transfer", Toast.LENGTH_SHORT).show()
+            else -> {
+                update(
+                    model.copy(
+                        accounts = model.accounts.map {
+                            when (it.id) {
+                                from.id -> it.copy(balance = it.balance - t.amount)
+                                to.id -> it.copy(balance = it.balance + t.amount)
+                                else -> it
+                            }
+                        },
+                    ),
+                )
+                Toast.makeText(
+                    context,
+                    "Transferred ${formatMoney(t.amount)} · ${from.name.ifBlank { "From" }} → ${to.name.ifBlank { "To" }}",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }
+    }
 
     val accounts = model.accounts
     val selectedIndex = selected.coerceIn(0, maxOf(0, accounts.size - 1))
@@ -322,11 +400,12 @@ internal fun ExpenseEditor(
     val defaultAccent = MaterialTheme.colorScheme.primary
     val accentFor: (ExpAccount) -> Color = { a -> a.colorArgb.takeIf { it != 0 }?.let { Color(it) } ?: defaultAccent }
 
+    val sidePadding = responsiveHorizontalPadding(compact = 16.dp)
     LazyColumn(
         modifier = modifier
             .fillMaxWidth()
             .imePadding(),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 28.dp),
+        contentPadding = PaddingValues(start = sidePadding, end = sidePadding, bottom = 96.dp),
     ) {
         item {
             Spacer(Modifier.height(8.dp))
@@ -416,6 +495,27 @@ internal fun ExpenseEditor(
                     AddSectionButton(onClick = { showAddSection = true })
                     Spacer(Modifier.height(24.dp))
                 }
+            }
+        }
+
+        // Bank transfers are note-level (they move money between accounts), so they live at the
+        // bottom, below whichever account is open. Needs at least two accounts to be useful.
+        if (accounts.size >= 2 && (model.transfers.isNotEmpty() || !readOnly)) {
+            item(key = "bank_transfers") {
+                BankTransfersCard(
+                    accounts = accounts,
+                    transfers = model.transfers,
+                    accent = account?.let(accentFor) ?: defaultAccent,
+                    readOnly = readOnly,
+                    onAdd = { addTransfer() },
+                    onName = { id, v -> updateTransfer(id) { it.copy(name = v) } },
+                    onFrom = { id, accId -> updateTransfer(id) { it.copy(fromId = accId) } },
+                    onTo = { id, accId -> updateTransfer(id) { it.copy(toId = accId) } },
+                    onAmount = { id, v -> updateTransfer(id) { it.copy(amount = v) } },
+                    onExecute = { executeTransfer(it) },
+                    onRemove = { removeTransfer(it) },
+                )
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
@@ -882,6 +982,178 @@ private fun AddSectionButton(onClick: () -> Unit, label: String = "Add section")
     }
 }
 
+// ---- Bank transfers ------------------------------------------------------------
+
+@Composable
+private fun BankTransfersCard(
+    accounts: List<ExpAccount>,
+    transfers: List<ExpTransfer>,
+    accent: Color,
+    readOnly: Boolean,
+    onAdd: () -> Unit,
+    onName: (String, String) -> Unit,
+    onFrom: (String, String) -> Unit,
+    onTo: (String, String) -> Unit,
+    onAmount: (String, Double) -> Unit,
+    onExecute: (ExpTransfer) -> Unit,
+    onRemove: (String) -> Unit,
+) {
+    ExpenseCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.SwapHoriz, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Bank transfers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                Text("Move money between your accounts", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (transfers.isEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                text = if (readOnly) "No transfers saved."
+                else "Save a from → to transfer once, then run it with a single tap every month.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        transfers.forEach { t ->
+            key(t.id) {
+                Spacer(Modifier.height(12.dp))
+                TransferRow(
+                    transfer = t,
+                    accounts = accounts,
+                    accent = accent,
+                    readOnly = readOnly,
+                    onName = { onName(t.id, it) },
+                    onFrom = { onFrom(t.id, it) },
+                    onTo = { onTo(t.id, it) },
+                    onAmount = { onAmount(t.id, it) },
+                    onExecute = { onExecute(t) },
+                    onRemove = { onRemove(t.id) },
+                )
+            }
+        }
+        if (!readOnly) {
+            Spacer(Modifier.height(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(onClick = onAdd)
+                    .padding(vertical = 6.dp, horizontal = 2.dp),
+            ) {
+                Icon(Icons.Rounded.Add, contentDescription = "Add transfer", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Add transfer", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransferRow(
+    transfer: ExpTransfer,
+    accounts: List<ExpAccount>,
+    accent: Color,
+    readOnly: Boolean,
+    onName: (String) -> Unit,
+    onFrom: (String) -> Unit,
+    onTo: (String) -> Unit,
+    onAmount: (Double) -> Unit,
+    onExecute: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            PlainField(value = transfer.name, placeholder = "Transfer name (e.g. Rent)", onChange = onName, modifier = Modifier.weight(1f))
+            if (!readOnly) DeleteDot { onRemove() }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            AccountDropdown(label = "From", accounts = accounts, selectedId = transfer.fromId, enabled = !readOnly, modifier = Modifier.weight(1f), onSelect = onFrom)
+            Spacer(Modifier.width(6.dp))
+            Icon(Icons.Rounded.ArrowForward, contentDescription = "to", tint = accent, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            AccountDropdown(label = "To", accounts = accounts, selectedId = transfer.toId, enabled = !readOnly, modifier = Modifier.weight(1f), onSelect = onTo)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Column(Modifier.weight(1f)) {
+                Text("Amount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(2.dp))
+                MoneyField(value = transfer.amount, onChange = onAmount, textStyle = MaterialTheme.typography.titleMedium)
+            }
+            if (!readOnly) {
+                Spacer(Modifier.width(10.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(accent)
+                        .clickable(onClick = onExecute)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                ) {
+                    Icon(Icons.Rounded.SwapHoriz, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Transfer", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = Color.White)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccountDropdown(
+    label: String,
+    accounts: List<ExpAccount>,
+    selectedId: String,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onSelect: (String) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    val selected = accounts.firstOrNull { it.id == selectedId }
+    Column(modifier) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        Box {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .clickable(enabled = enabled) { open = true }
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+            ) {
+                Text(
+                    text = selected?.name?.ifBlank { "Account" } ?: "Select",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected != null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (enabled) Icon(Icons.Rounded.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+            }
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                accounts.forEach { acc ->
+                    DropdownMenuItem(
+                        text = { Text(acc.name.ifBlank { "Account" }) },
+                        onClick = { open = false; onSelect(acc.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
 // ---- Dialogs -------------------------------------------------------------------
 
 @Composable
@@ -900,9 +1172,9 @@ private fun AddSectionDialog(onAdd: (name: String, iconKey: String, deduct: Bool
                 Spacer(Modifier.height(8.dp))
                 IconPickerRow(selected = iconKey, onSelect = { iconKey = it })
                 Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ChoiceChip("Spends from balance", deduct) { deduct = true }
-                    ChoiceChip("Track separately", !deduct) { deduct = false }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip("Spends from balance", deduct, Modifier.fillMaxWidth()) { deduct = true }
+                    ChoiceChip("Track separately", !deduct, Modifier.fillMaxWidth()) { deduct = false }
                 }
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -1065,13 +1337,15 @@ private fun IconPickerRow(selected: String, onSelect: (String) -> Unit) {
 }
 
 @Composable
-private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun ChoiceChip(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     Text(
         text = label,
         style = MaterialTheme.typography.labelLarge,
         fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        textAlign = TextAlign.Center,
         color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(50))
             .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
