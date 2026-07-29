@@ -17,8 +17,8 @@ android {
     applicationId = "in.hichauhan.mynotes"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.2.0.2"
+    versionCode = 9
+    versionName = "1.9.0.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
