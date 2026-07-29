@@ -109,7 +109,7 @@ fun ReminderScreen(
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconCircle(Icons.Rounded.ArrowBack, "Back", onBack)
+            IconCircle(Icons.Rounded.ArrowBack, "Back", onClick = onBack)
             Spacer(Modifier.width(4.dp))
             Text(
                 text = "Reminders",
