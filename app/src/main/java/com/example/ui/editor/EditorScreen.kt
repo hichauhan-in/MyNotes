@@ -160,6 +160,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -191,6 +192,7 @@ import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
 import com.example.data.export.ShareIO
 import com.example.data.share.NoteSharing
+import com.example.data.settings.PageInkTextMode
 import com.example.data.sync.DriveAuth
 import com.example.data.sync.DriveShare
 import com.google.android.gms.auth.api.identity.Identity
@@ -236,6 +238,7 @@ fun EditorScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
     val driveConnected by viewModel.driveConnected.collectAsStateWithLifecycle()
+    val pageInkTextMode by viewModel.pageInkTextMode.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
     // New notes and template drafts open ready to edit. Existing notes open read-only unless the
@@ -272,6 +275,10 @@ fun EditorScreen(
     var penColor by remember { mutableStateOf(0) }
     var penWidthDp by remember { mutableStateOf(4f) }
     var cropImageBlock by remember { mutableStateOf<ImageBlock?>(null) }
+    // Page-ink "write below the drawing": measured height of the text above the drawing, used to
+    // place the trailing writing line beneath the lowest ink stroke so typing never lands on it.
+    val inkDensity = LocalDensity.current
+    var inkUpperHeightPx by remember { mutableStateOf(0) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -908,6 +915,17 @@ fun EditorScreen(
             }
         }
 
+        // In "write below the drawing" mode, make sure the note ends in a text line to write on once
+        // a page drawing exists (append one if it currently ends in a non-text block).
+        LaunchedEffect(pageInkTextMode, inkStrokes.isEmpty(), editing, blocks.lastOrNull()?.let { it::class }) {
+            if (editing && pageInkTextMode == PageInkTextMode.BELOW && inkStrokes.isNotEmpty() &&
+                (blocks.isEmpty() || blocks.last() !is TextBlock)
+            ) {
+                blocks.add(TextBlock(newBlockId(), TextFieldValue("")))
+                pushBlocks(immediate = false)
+            }
+        }
+
         when (state.type) {
             NoteType.EXPENSE -> DeferredEditorBody(modifier = Modifier.weight(1f)) {
                 ExpenseEditor(
@@ -1007,17 +1025,37 @@ fun EditorScreen(
                         .fillMaxWidth(),
                 ) {
                     val inkScroll = rememberScrollState()
+                    // "Write below the drawing" reserves space so the trailing text line sits beneath
+                    // the lowest ink stroke; "Free overlay" keeps the classic behaviour.
+                    val writeBelow = pageInkTextMode == PageInkTextMode.BELOW && inkStrokes.isNotEmpty()
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
                             .verticalScroll(inkScroll)
                             .padding(horizontal = contentSidePadding),
                     ) {
-                        editorHeaderContent()
-                        blocks.forEachIndexed { index, block ->
-                            key(block.id) { renderTextBlock(index, block) }
+                        if (writeBelow) {
+                            Column(modifier = Modifier.onSizeChanged { inkUpperHeightPx = it.height }) {
+                                editorHeaderContent()
+                                blocks.forEachIndexed { index, block ->
+                                    if (index < blocks.lastIndex) key(block.id) { renderTextBlock(index, block) }
+                                }
+                            }
+                            // Push the trailing writing line down to just below the lowest stroke.
+                            val inkBottomPx = with(inkDensity) { (pageInkBottomDp(inkStrokes) + 16f).dp.toPx() }
+                            val gapPx = (inkBottomPx - inkUpperHeightPx).coerceAtLeast(0f)
+                            Spacer(Modifier.height(with(inkDensity) { gapPx.toDp() }))
+                            blocks.lastOrNull()?.let { last ->
+                                key(last.id) { renderTextBlock(blocks.lastIndex, last) }
+                            }
+                            Spacer(Modifier.height(140.dp))
+                        } else {
+                            editorHeaderContent()
+                            blocks.forEachIndexed { index, block ->
+                                key(block.id) { renderTextBlock(index, block) }
+                            }
+                            Spacer(Modifier.height(24.dp))
                         }
-                        Spacer(Modifier.height(24.dp))
                     }
                     PageInkLayer(
                         strokes = inkStrokes,
@@ -1066,7 +1104,24 @@ fun EditorScreen(
                             pushBlocks(immediate = true)
                         }
                     },
-                    onDone = { pageDrawMode = false },
+                    onDone = {
+                        pageDrawMode = false
+                        // In "write below" mode, drop the caret onto the line beneath the drawing so
+                        // the user keeps typing there instead of over the strokes.
+                        if (pageInkTextMode == PageInkTextMode.BELOW) {
+                            val last = blocks.lastOrNull()
+                            val targetId = if (last is TextBlock) {
+                                last.id
+                            } else {
+                                val nb = TextBlock(newBlockId(), TextFieldValue(""))
+                                blocks.add(nb)
+                                pushBlocks(immediate = false)
+                                nb.id
+                            }
+                            focusedBlockId = targetId
+                            pendingFocusBlockId = targetId
+                        }
+                    },
                 )
             } else {
                 FormattingToolbar(
@@ -3222,6 +3277,10 @@ private fun CalloutBlockView(
         }
     }
 }
+
+/** The lowest Y (in content-dp) any page-ink stroke reaches, or 0 when there are none. */
+private fun pageInkBottomDp(strokes: List<InkStroke>): Float =
+    strokes.maxOfOrNull { s -> s.points.maxOfOrNull { it.y } ?: 0f } ?: 0f
 
 /** A lightweight, resizable freehand drawing area inside a note. */
 @Composable

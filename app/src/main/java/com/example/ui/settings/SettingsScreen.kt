@@ -44,10 +44,12 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.ColorLens
 import androidx.compose.material.icons.rounded.DarkMode
+import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.LinkOff
@@ -61,6 +63,7 @@ import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material.icons.rounded.Sync
 import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VerticalAlignBottom
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Button
@@ -92,6 +95,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.google.android.gms.auth.api.identity.Identity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.sync.DriveAuth
+import com.example.data.settings.PageInkTextMode
 import com.example.ui.components.NeuIconButton
 import com.example.ui.components.NeuSurface
 import com.example.ui.theme.ThemeMode
@@ -401,6 +405,37 @@ fun SettingsScreen(
                     checked = settings.swipeNavigationEnabled,
                     onCheckedChange = { viewModel.setSwipeNavigationEnabled(it) },
                 )
+                SettingsDivider()
+                // Where typed text goes relative to a full-page pen drawing.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Rounded.Draw,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "Drawing & text",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = if (settings.pageInkTextMode == PageInkTextMode.BELOW)
+                                "New text flows below your page drawings"
+                            else
+                                "Drawings float over the note; type anywhere",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                PageInkModeSelector(
+                    selected = settings.pageInkTextMode,
+                    onSelect = { viewModel.setPageInkTextMode(it) },
+                )
             }
 
             Spacer(Modifier.height(20.dp))
@@ -648,6 +683,59 @@ private fun ToggleRow(
                 checkedTrackColor = MaterialTheme.colorScheme.primary,
             ),
         )
+    }
+}
+
+@Composable
+private fun PageInkModeSelector(
+    selected: PageInkTextMode,
+    onSelect: (PageInkTextMode) -> Unit,
+) {
+    val options = listOf(
+        Triple(PageInkTextMode.BELOW, "Below drawing", Icons.Rounded.VerticalAlignBottom),
+        Triple(PageInkTextMode.FREE, "Free overlay", Icons.Rounded.Layers),
+    )
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        options.forEach { (mode, label, icon) ->
+            val isSelected = mode == selected
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(13.dp))
+                    .then(
+                        if (isSelected) Modifier.background(brandGradientHorizontal())
+                        else Modifier
+                    )
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onSelect(mode) }
+                    .padding(vertical = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 

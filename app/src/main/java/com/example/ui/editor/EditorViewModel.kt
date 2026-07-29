@@ -82,6 +82,11 @@ class EditorViewModel : ViewModel() {
         settings.settings.map { it.driveAccountEmail != null }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** How typed text shares space with full-page pen drawings (Settings › Additional configurations). */
+    val pageInkTextMode: StateFlow<com.example.data.settings.PageInkTextMode> =
+        settings.settings.map { it.pageInkTextMode }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.example.data.settings.PageInkTextMode.BELOW)
+
     private var persisted = false
     private var autoSaveJob: Job? = null
     private var loaded = false

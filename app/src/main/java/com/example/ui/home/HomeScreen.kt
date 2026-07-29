@@ -1862,18 +1862,18 @@ private fun ExpandableFab(
             exit = fadeOut(),
         ) {
             Column(horizontalAlignment = Alignment.End) {
-                FabAction("New book", Icons.Rounded.CreateNewFolder, bordered = true, iconSlotSize = 62.dp) { onCreateBook() }
-                Spacer(Modifier.height(12.dp))
-                FabAction("Reminder", Icons.Rounded.NotificationsActive, bordered = true, iconSlotSize = 62.dp) { onReminder() }
-                Spacer(Modifier.height(12.dp))
-                FabAction("Expenses", Icons.Rounded.AccountBalanceWallet, bordered = true, iconSlotSize = 62.dp) { onAction("expense") }
-                Spacer(Modifier.height(12.dp))
-                FabAction("Board", Icons.Rounded.Draw, bordered = true, iconSlotSize = 62.dp) { onAction("scribble") }
-                Spacer(Modifier.height(12.dp))
-                FabAction("Checklist", Icons.Rounded.Checklist, bordered = true, iconSlotSize = 62.dp) { onAction("checklist") }
-                Spacer(Modifier.height(12.dp))
                 FabAction("Import note", Icons.Rounded.Download, bordered = true, iconSlotSize = 62.dp) { onImport() }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(6.dp))
+                FabAction("New book", Icons.Rounded.CreateNewFolder, bordered = true, iconSlotSize = 62.dp) { onCreateBook() }
+                Spacer(Modifier.height(6.dp))
+                FabAction("Reminder", Icons.Rounded.NotificationsActive, bordered = true, iconSlotSize = 62.dp) { onReminder() }
+                Spacer(Modifier.height(6.dp))
+                FabAction("Expenses", Icons.Rounded.AccountBalanceWallet, bordered = true, iconSlotSize = 62.dp) { onAction("expense") }
+                Spacer(Modifier.height(6.dp))
+                FabAction("Board", Icons.Rounded.Draw, bordered = true, iconSlotSize = 62.dp) { onAction("scribble") }
+                Spacer(Modifier.height(6.dp))
+                FabAction("Checklist", Icons.Rounded.Checklist, bordered = true, iconSlotSize = 62.dp) { onAction("checklist") }
+                Spacer(Modifier.height(6.dp))
                 FabAction("New note", Icons.Rounded.EditNote, bordered = true, iconSlotSize = 62.dp) { onAction(null) }
                 Spacer(Modifier.height(16.dp))
             }

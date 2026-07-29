@@ -20,6 +20,14 @@ import org.json.JSONObject
 private val Context.settingsDataStore: DataStore<Preferences> by
     preferencesDataStore(name = "mynotes_settings")
 
+/** How typed text and full-page pen drawings share space in a note. */
+enum class PageInkTextMode {
+    /** Reserve space so new text always flows *below* your drawings - they never overlap. */
+    BELOW,
+    /** Draw anywhere over the note; typing stays wherever the cursor is (drawings float on top). */
+    FREE,
+}
+
 /** Immutable snapshot of every user preference. */
 data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -47,6 +55,8 @@ data class AppSettings(
     val openNotesInEditMode: Boolean = false,
     /** When true, a horizontal swipe on the home screen moves between the filter tabs. */
     val swipeNavigationEnabled: Boolean = false,
+    /** How typed text shares space with full-page pen drawings in a note. */
+    val pageInkTextMode: PageInkTextMode = PageInkTextMode.BELOW,
 )
 
 /**
@@ -81,6 +91,7 @@ class SettingsRepository(context: Context) {
         val EXPORT_FOLDER = stringPreferencesKey("default_export_folder")
         val OPEN_IN_EDIT = booleanPreferencesKey("open_notes_in_edit_mode")
         val SWIPE_NAV = booleanPreferencesKey("swipe_navigation_enabled")
+        val PAGE_INK_MODE = stringPreferencesKey("page_ink_text_mode")
     }
 
     val customTemplates: Flow<List<CustomTemplate>> = dataStore.data.map { prefs ->
@@ -114,6 +125,9 @@ class SettingsRepository(context: Context) {
             defaultExportFolder = prefs[Keys.EXPORT_FOLDER],
             openNotesInEditMode = prefs[Keys.OPEN_IN_EDIT] ?: false,
             swipeNavigationEnabled = prefs[Keys.SWIPE_NAV] ?: false,
+            pageInkTextMode = runCatching {
+                PageInkTextMode.valueOf(prefs[Keys.PAGE_INK_MODE] ?: PageInkTextMode.BELOW.name)
+            }.getOrDefault(PageInkTextMode.BELOW),
         )
     }
 
@@ -190,6 +204,9 @@ class SettingsRepository(context: Context) {
 
     suspend fun setSwipeNavigationEnabled(value: Boolean) =
         edit { it[Keys.SWIPE_NAV] = value }
+
+    suspend fun setPageInkTextMode(mode: PageInkTextMode) =
+        edit { it[Keys.PAGE_INK_MODE] = mode.name }
 
     suspend fun addTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")

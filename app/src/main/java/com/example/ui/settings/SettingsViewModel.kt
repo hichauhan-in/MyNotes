@@ -84,6 +84,10 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { repository.setSwipeNavigationEnabled(value) }
     }
 
+    fun setPageInkTextMode(mode: com.example.data.settings.PageInkTextMode) {
+        viewModelScope.launch { repository.setPageInkTextMode(mode) }
+    }
+
     // ---- Google Drive sync ----
 
     /** Called while the account picker / consent screen is showing. */

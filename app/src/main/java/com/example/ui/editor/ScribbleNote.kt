@@ -1,5 +1,8 @@
 package com.example.ui.editor
 
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.media.ExifInterface
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -45,6 +48,7 @@ import androidx.compose.material.icons.rounded.Rectangle
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Crop
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.DragIndicator
 import androidx.compose.material.icons.rounded.Draw
@@ -101,6 +105,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -173,6 +178,28 @@ private val penColors = listOf(
 )
 
 private fun emptyWb() = WbModel(emptyList(), emptyList(), emptyList(), emptyList(), 0f, 0f, 1f)
+
+/**
+ * Width / height of an attachment image (respecting EXIF rotation), or null if it can't be read.
+ * Used to size a board image to its natural aspect ratio so it never looks stretched or letterboxed.
+ * Call off the main thread (it decodes bounds + reads EXIF).
+ */
+private fun imageAspectRatio(context: Context, name: String): Float? {
+    val bytes = AttachmentStore.readDecrypted(context, name) ?: return null
+    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+    var w = opts.outWidth
+    var h = opts.outHeight
+    if (w <= 0 || h <= 0) return null
+    runCatching {
+        val exif = ExifInterface(ByteArrayInputStream(bytes))
+        val orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        if (orientation == ExifInterface.ORIENTATION_ROTATE_90 || orientation == ExifInterface.ORIENTATION_ROTATE_270) {
+            val t = w; w = h; h = t
+        }
+    }
+    return w.toFloat() / h.toFloat()
+}
 
 private fun parseWb(content: String): WbModel = runCatching {
     if (content.isBlank()) return@runCatching emptyWb()
@@ -370,6 +397,8 @@ internal fun ScribbleEditor(
     val readOnly = LocalReadOnly.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // The board image currently open in the crop editor (null = none).
+    var cropImageId by remember { mutableStateOf<String?>(null) }
 
     fun update(m: WbModel) {
         model = m
@@ -398,11 +427,16 @@ internal fun ScribbleEditor(
             scope.launch {
                 val name = withContext(Dispatchers.IO) { AttachmentStore.importFromUri(context, uri) }
                 if (name != null) {
+                    // Size the new image to its natural aspect ratio (no stretching / letterboxing),
+                    // and drop it centred in the current view.
+                    val aspect = withContext(Dispatchers.IO) { imageAspectRatio(context, name) }
                     val cw = canvasSize.width.toFloat()
                     val ch = canvasSize.height.toFloat()
                     val cx = if (cw > 0f) (cw / 2f - model.panX) / model.scale else 0f
                     val cy = if (ch > 0f) (ch / 2f - model.panY) / model.scale else 0f
-                    update(model.copy(images = model.images + WbImage(UUID.randomUUID().toString(), name, cx - 150f, cy - 100f, 300f, 200f)))
+                    val w = 300f
+                    val h = if (aspect != null && aspect > 0f) (w / aspect).coerceIn(80f, 1400f) else 200f
+                    update(model.copy(images = model.images + WbImage(UUID.randomUUID().toString(), name, cx - w / 2f, cy - h / 2f, w, h)))
                 }
             }
         }
@@ -508,9 +542,15 @@ internal fun ScribbleEditor(
                 }
 
                 WbMode.MOVE -> Modifier.pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
+                    detectTransformGestures { centroid, pan, zoom, _ ->
+                        // Zoom around the pinch point (the two-finger centroid), not the board's
+                        // centre, so the spot under the user's fingers stays put while scaling - and
+                        // still translate by the pan. This is what makes zoom feel "where I want".
                         val newScale = (model.scale * zoom).coerceIn(WB_MIN_SCALE, WB_MAX_SCALE)
-                        update(model.copy(panX = model.panX + pan.x, panY = model.panY + pan.y, scale = newScale))
+                        val effZoom = if (model.scale != 0f) newScale / model.scale else 1f
+                        val newPanX = centroid.x - (centroid.x - pan.x - model.panX) * effZoom
+                        val newPanY = centroid.y - (centroid.y - pan.y - model.panY) * effZoom
+                        update(model.copy(panX = newPanX, panY = newPanY, scale = newScale))
                     }
                 }
 
@@ -561,12 +601,27 @@ internal fun ScribbleEditor(
                         key(img.id) {
                             WbImageNode(
                                 image = img,
+                                boardScale = model.scale,
                                 onMove = { dx, dy ->
                                     update(model.copy(images = model.images.map { if (it.id == img.id) it.copy(x = it.x + dx, y = it.y + dy) else it }))
                                 },
                                 onResize = { dw, dh ->
-                                    update(model.copy(images = model.images.map { if (it.id == img.id) it.copy(width = (it.width + dw).coerceAtLeast(60f), height = (it.height + dh).coerceAtLeast(60f)) else it }))
+                                    // Resize proportionally (keep the image's aspect ratio) so it never distorts;
+                                    // follow whichever drag axis moved more so the corner feels natural.
+                                    update(
+                                        model.copy(
+                                            images = model.images.map {
+                                                if (it.id == img.id) {
+                                                    val aspect = if (it.height != 0f) it.width / it.height else 1f
+                                                    val delta = if (abs(dw) >= abs(dh)) dw else dh
+                                                    val newW = (it.width + delta).coerceIn(60f, 4000f)
+                                                    it.copy(width = newW, height = (newW / aspect).coerceAtLeast(60f))
+                                                } else it
+                                            },
+                                        ),
+                                    )
                                 },
+                                onCrop = { cropImageId = img.id },
                                 onDelete = {
                                     AttachmentStore.delete(context, img.attachment)
                                     update(model.copy(images = model.images.filterNot { it.id == img.id }))
@@ -646,23 +701,60 @@ internal fun ScribbleEditor(
         }
         Spacer(Modifier.height(12.dp))
     }
+
+    // Crop an existing board image (reuses the note editor's freeform crop). Swaps in the cropped
+    // copy, re-fits the frame to the new aspect ratio, and removes the old encrypted file.
+    val cropTarget = cropImageId?.let { id -> model.images.firstOrNull { it.id == id } }
+    if (cropTarget != null && !readOnly) {
+        ImageCropDialog(
+            name = cropTarget.attachment,
+            onCropped = { newName ->
+                val oldName = cropTarget.attachment
+                val targetId = cropTarget.id
+                cropImageId = null
+                scope.launch {
+                    val aspect = withContext(Dispatchers.IO) { imageAspectRatio(context, newName) }
+                    update(
+                        model.copy(
+                            images = model.images.map {
+                                if (it.id == targetId) {
+                                    val newH = if (aspect != null && aspect > 0f) (it.width / aspect).coerceAtLeast(60f) else it.height
+                                    it.copy(attachment = newName, height = newH)
+                                } else it
+                            },
+                        ),
+                    )
+                    if (newName != oldName) withContext(Dispatchers.IO) { AttachmentStore.delete(context, oldName) }
+                }
+            },
+            onDismiss = { cropImageId = null },
+        )
+    }
 }
 
 @Composable
 private fun WbImageNode(
     image: WbImage,
+    boardScale: Float,
     onMove: (Float, Float) -> Unit,
     onResize: (Float, Float) -> Unit,
+    onCrop: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val readOnly = LocalReadOnly.current
     val density = LocalDensity.current
+    // This node lives INSIDE the zoomed board layer, so a fixed dp would shrink/grow with the zoom.
+    // Divide handle metrics by the board scale to keep them a constant, easy-to-grab on-screen size.
+    val s = boardScale.coerceIn(WB_MIN_SCALE, WB_MAX_SCALE)
+    val handleSize = 30.dp / s
+    val handlePad = 5.dp / s
+    val iconSize = 16.dp / s
     Box(
         modifier = Modifier
             .offset { IntOffset(image.x.roundToInt(), image.y.roundToInt()) }
             .size(with(density) { image.width.toDp() }, with(density) { image.height.toDp() })
-            .clip(RoundedCornerShape(10.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .clip(RoundedCornerShape(10.dp / s))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
     ) {
         AsyncImage(
             model = EncAttachment(image.attachment),
@@ -671,13 +763,14 @@ private fun WbImageNode(
             modifier = Modifier.fillMaxSize(),
         )
         if (!readOnly) {
+            // Move (top-left)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(4.dp)
-                    .size(28.dp)
+                    .padding(handlePad)
+                    .size(handleSize)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
                     .pointerInput(Unit) {
                         detectDragGestures { change, drag ->
                             change.consume()
@@ -686,27 +779,42 @@ private fun WbImageNode(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.DragIndicator, contentDescription = "Move image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(16.dp))
+                Icon(Icons.Rounded.DragIndicator, contentDescription = "Move image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(iconSize))
             }
+            // Delete (top-right)
             Box(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .size(28.dp)
+                    .padding(handlePad)
+                    .size(handleSize)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
                     .clickable(onClick = onDelete),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.Close, contentDescription = "Delete image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(15.dp))
+                Icon(Icons.Rounded.Close, contentDescription = "Delete image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(iconSize))
             }
+            // Crop (bottom-left)
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(handlePad)
+                    .size(handleSize)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
+                    .clickable(onClick = onCrop),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Crop, contentDescription = "Crop image", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(iconSize))
+            }
+            // Resize (bottom-right, aspect-locked)
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(4.dp)
-                    .size(28.dp)
+                    .padding(handlePad)
+                    .size(handleSize)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.85f))
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
                     .pointerInput(Unit) {
                         detectDragGestures { change, drag ->
                             change.consume()
@@ -715,7 +823,7 @@ private fun WbImageNode(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.Rounded.OpenInFull, contentDescription = "Resize image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(15.dp))
+                Icon(Icons.Rounded.OpenInFull, contentDescription = "Resize image", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(iconSize))
             }
         }
     }
