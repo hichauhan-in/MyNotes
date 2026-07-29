@@ -68,11 +68,15 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.FormatListBulleted
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.Crop
+import androidx.compose.material.icons.rounded.DocumentScanner
+import androidx.compose.material.icons.rounded.Email
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
@@ -84,6 +88,7 @@ import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Draw
 import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Place
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material.icons.rounded.Share
@@ -134,6 +139,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -191,6 +197,12 @@ import com.example.data.export.ExportFormat
 import com.example.data.export.ExportIO
 import com.example.data.export.Exporter
 import com.example.data.export.ShareIO
+import com.example.data.ml.AiAssist
+import com.example.data.ml.HandwritingRecognizer
+import com.example.data.ml.SmartActionType
+import com.example.data.ml.SmartSuggestion
+import com.example.data.ml.SmartText
+import com.example.data.ml.TextExtractor
 import com.example.data.share.NoteSharing
 import com.example.data.settings.PageInkTextMode
 import com.example.data.sync.DriveAuth
@@ -217,6 +229,9 @@ import java.util.UUID
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -225,6 +240,7 @@ import org.json.JSONObject
 /** When true, the editor is shown read-only; the pencil in the top bar toggles editing. */
 internal val LocalReadOnly = staticCompositionLocalOf { false }
 
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 @Composable
 fun EditorScreen(
     viewModel: EditorViewModel,
@@ -239,6 +255,7 @@ fun EditorScreen(
     val defaultExportFolder by viewModel.defaultExportFolder.collectAsStateWithLifecycle()
     val driveConnected by viewModel.driveConnected.collectAsStateWithLifecycle()
     val pageInkTextMode by viewModel.pageInkTextMode.collectAsStateWithLifecycle()
+    val smartSuggestionsEnabled by viewModel.smartSuggestionsEnabled.collectAsStateWithLifecycle()
 
     var titleField by remember { mutableStateOf(TextFieldValue()) }
     // New notes and template drafts open ready to edit. Existing notes open read-only unless the
@@ -258,6 +275,13 @@ fun EditorScreen(
     var showShareSheet by remember { mutableStateOf(false) }
     var showSharePassphrase by remember { mutableStateOf(false) }
     var showReminderSheet by remember { mutableStateOf(false) }
+    // Optional prefill when the reminder sheet is opened from a detected date/time smart chip.
+    var reminderPrefillTime by remember { mutableStateOf<Long?>(null) }
+    var reminderPrefillBody by remember { mutableStateOf("") }
+    // On-device smart suggestions (dates → reminders, links, phone/email/address) for this note.
+    var smartActions by remember { mutableStateOf<List<SmartSuggestion>>(emptyList()) }
+    // Whether on-device GenAI summarization (Gemini Nano) is available on this device.
+    var aiSummaryAvailable by remember { mutableStateOf(false) }
     val reminderVm: ReminderViewModel = viewModel()
     val notifPermLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -310,6 +334,70 @@ fun EditorScreen(
         }
     }
 
+    // Tapping the empty area below the note drops the caret at the END of the last line, so you
+    // never have to aim exactly at the text (great for jumping to the bottom of a fresh note).
+    fun focusEndOfNote() {
+        val last = blocks.lastOrNull()
+        val targetId = if (last is TextBlock) {
+            val idx = blocks.lastIndex
+            blocks[idx] = last.copy(value = last.value.copy(selection = TextRange(last.value.text.length)))
+            last.id
+        } else {
+            val nb = TextBlock(newBlockId(), TextFieldValue(""))
+            blocks.add(nb)
+            pushBlocks(immediate = false)
+            nb.id
+        }
+        focusedBlockId = targetId
+        pendingFocusBlockId = targetId
+    }
+
+    // On-device handwriting → text: recognise the page-ink strokes with ML Kit and insert the
+    // result as a new text line. Nothing is uploaded.
+    fun recognizeInkToText() {
+        if (inkStrokes.isEmpty()) return
+        android.widget.Toast.makeText(context, "Reading handwriting…", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val text = HandwritingRecognizer.recognize(inkStrokes.map { it.points })
+            if (text.isBlank()) {
+                android.widget.Toast.makeText(context, "Couldn't read the handwriting", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val nb = TextBlock(newBlockId(), TextFieldValue(text))
+            blocks.add(nb)
+            focusedBlockId = nb.id
+            pendingFocusBlockId = nb.id
+            pushBlocks(immediate = true)
+            android.widget.Toast.makeText(context, "Added as text below", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // On-device GenAI (Gemini Nano) summary → inserts a bullet summary as a callout at the top of the
+    // note. Fully local; only runs on supported devices (availability checked below).
+    fun summarizeNote() {
+        val text = blocks.filterIsInstance<TextBlock>().joinToString("\n") { it.value.text }.trim()
+        if (text.length < 200) {
+            android.widget.Toast.makeText(context, "Write a bit more to summarize", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        android.widget.Toast.makeText(context, "Summarizing on‑device…", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val summary = AiAssist.summarize(context, text)
+            if (summary.isNullOrBlank()) {
+                android.widget.Toast.makeText(context, "Couldn't summarize on this device", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            blocks.add(0, CalloutBlock(newBlockId(), "🧠", summary))
+            pushBlocks(immediate = true)
+            android.widget.Toast.makeText(context, "Summary added at the top", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // Detect whether on-device summarization can run here (hides the menu item where it can't).
+    LaunchedEffect(Unit) {
+        aiSummaryAvailable = runCatching { AiAssist.canSummarize(context) }.getOrDefault(false)
+    }
+
     // Insert a media block (image / audio) at the cursor, splitting the focused text block.
     // When focusTrailing is set (tables/checklists), the caret jumps to the empty text line just
     // below the inserted block instead of staying in the block above it.
@@ -358,6 +446,70 @@ fun EditorScreen(
                 pushBlocks(immediate = true)
             }
         }
+    }
+
+    // On-device OCR: read the image's text with ML Kit (fully local) and drop it into a new text
+    // line right below the picture. Nothing is uploaded.
+    fun extractTextFromImage(block: ImageBlock) {
+        android.widget.Toast.makeText(context, "Reading text…", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val text = TextExtractor.fromAttachment(context, block.fileName)
+            if (text.isBlank()) {
+                android.widget.Toast.makeText(context, "No text found in this image", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val idx = blocks.indexOfFirst { it.id == block.id }
+            if (idx >= 0) {
+                val nb = TextBlock(newBlockId(), TextFieldValue(text))
+                blocks.add(idx + 1, nb)
+                focusedBlockId = nb.id
+                pendingFocusBlockId = nb.id
+                pushBlocks(immediate = true)
+                android.widget.Toast.makeText(context, "Text added below the image", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Handles a tap on an on-device smart suggestion chip (date → reminder, or open the phone /
+    // email / browser / maps app). All actions stay on-device except the ones the user explicitly
+    // launches (a dialer, mail client, etc.).
+    fun handleSmartAction(suggestion: SmartSuggestion) {
+        when (suggestion.type) {
+            SmartActionType.REMINDER -> {
+                reminderPrefillTime = suggestion.triggerAt
+                reminderPrefillBody = suggestion.value
+                showReminderSheet = true
+            }
+            SmartActionType.CALL -> runCatching {
+                val tel = suggestion.value.filter { it.isDigit() || it == '+' }
+                context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$tel")))
+            }
+            SmartActionType.EMAIL -> runCatching {
+                context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${suggestion.value}")))
+            }
+            SmartActionType.URL -> runCatching {
+                val url = if (suggestion.value.startsWith("http")) suggestion.value else "https://${suggestion.value}"
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            }
+            SmartActionType.ADDRESS -> runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(suggestion.value)}")))
+            }
+        }
+    }
+
+    // Continuously (debounced) scan the note's text on-device for dates/links/etc while it's open.
+    LaunchedEffect(state.id, smartSuggestionsEnabled) {
+        if (!smartSuggestionsEnabled) {
+            smartActions = emptyList()
+            return@LaunchedEffect
+        }
+        snapshotFlow {
+            (blocks.filterIsInstance<TextBlock>().joinToString("\n") { it.value.text } + "\n" +
+                checklistItems.joinToString("\n") { it.text }).trim()
+        }
+            .debounce(700)
+            .distinctUntilChanged()
+            .collectLatest { text -> smartActions = SmartText.analyze(context, text) }
     }
 
     fun removeBlock(blockId: String) {
@@ -762,6 +914,7 @@ fun EditorScreen(
             onShare = { showShareSheet = true },
             onExport = { showExportSheet = true },
             onRemind = { showReminderSheet = true },
+            onSummarize = if (aiSummaryAvailable) ({ summarizeNote() }) else null,
             onDelete = {
                 focusManager.clearFocus(force = true)
                 viewModel.deleteToTrash { onNavigateBack() }
@@ -838,6 +991,10 @@ fun EditorScreen(
                         )
                     }
                 }
+                if (!state.templateMode && smartActions.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    SmartActionsRow(actions = smartActions, onAction = { handleSmartAction(it) })
+                }
                 Spacer(Modifier.height(16.dp))
             }
         }
@@ -862,6 +1019,7 @@ fun EditorScreen(
                         onWidthChange = { pct -> resizeImageBlock(block.id, pct) },
                         onRemove = { removeBlock(block.id) },
                         onCrop = { cropImageBlock = block },
+                        onExtractText = { extractTextFromImage(block) },
                     )
                     Spacer(Modifier.height(12.dp))
                 }
@@ -1016,7 +1174,20 @@ fun EditorScreen(
                     itemsIndexed(blocks, key = { _, block -> block.id }) { index, block ->
                         renderTextBlock(index, block)
                     }
-                    item(key = "editor-footer") { Spacer(Modifier.height(24.dp)) }
+                    item(key = "editor-footer") {
+                        // A generous tap zone below the note: tapping it drops the caret at the end
+                        // of the last line instead of forcing the user to aim precisely at the text.
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(220.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    enabled = editing,
+                                ) { focusEndOfNote() },
+                        )
+                    }
                 }
             } else {
                 Box(
@@ -1104,6 +1275,7 @@ fun EditorScreen(
                             pushBlocks(immediate = true)
                         }
                     },
+                    onRecognize = { recognizeInkToText() },
                     onDone = {
                         pageDrawMode = false
                         // In "write below" mode, drop the caret onto the line beneath the drawing so
@@ -1133,11 +1305,11 @@ fun EditorScreen(
                     },
                     onHeading = { prefix -> editFocusedBlock { prefixLine(it, prefix) } },
                     onFormat = { token -> editFocusedBlock { wrapSelection(it, token) } },
-                    onBullet = { editFocusedBlock { prefixLine(it, "- ") } },
+                    onBullet = { marker -> editFocusedBlock { prefixLine(it, marker) } },
                     onNumbered = { editFocusedBlock { prefixLine(it, "1. ") } },
                     onChecklist = { insertChecklistBlock() },
                     onWrap = { open, close -> editFocusedBlock { surround(it, open, close) } },
-                    onDivider = { editFocusedBlock { insert(it, "\n\n--------------------\n\n") } },
+                    onDivider = { text -> editFocusedBlock { insert(it, "\n\n$text\n\n") } },
                     onTable = { showTableDialog = true },
                     onCallout = { insertCalloutBlock() },
                     onSketch = { insertScribbleBlock() },
@@ -1186,9 +1358,13 @@ fun EditorScreen(
         ReminderEditorSheet(
             initial = null,
             prefillTitle = state.title.ifBlank { "Note reminder" },
+            prefillBody = reminderPrefillBody,
             prefillNoteId = state.id,
+            prefillTriggerAt = reminderPrefillTime,
             onSave = { reminder ->
                 showReminderSheet = false
+                reminderPrefillTime = null
+                reminderPrefillBody = ""
                 // Persist the note first so the reminder's link resolves when tapped.
                 viewModel.flush()
                 reminderVm.save(context, reminder)
@@ -1198,7 +1374,11 @@ fun EditorScreen(
                 android.widget.Toast.makeText(context, "Reminder set", android.widget.Toast.LENGTH_SHORT).show()
             },
             onDelete = null,
-            onDismiss = { showReminderSheet = false },
+            onDismiss = {
+                showReminderSheet = false
+                reminderPrefillTime = null
+                reminderPrefillBody = ""
+            },
         )
     }
 
@@ -1307,6 +1487,7 @@ private fun EditorTopBar(
     onShare: () -> Unit,
     onExport: () -> Unit,
     onRemind: () -> Unit,
+    onSummarize: (() -> Unit)? = null,
     onDelete: () -> Unit,
 ) {
     Row(
@@ -1342,7 +1523,7 @@ private fun EditorTopBar(
                 tint = if (editing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.width(10.dp))
-            EditorOverflowMenu(onShare = onShare, onExport = onExport, onRemind = onRemind, onDelete = onDelete)
+            EditorOverflowMenu(onShare = onShare, onExport = onExport, onRemind = onRemind, onSummarize = onSummarize, onDelete = onDelete)
         }
     }
 }
@@ -1353,6 +1534,7 @@ private fun EditorOverflowMenu(
     onShare: () -> Unit,
     onExport: () -> Unit,
     onRemind: () -> Unit,
+    onSummarize: (() -> Unit)? = null,
     onDelete: () -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -1404,6 +1586,7 @@ private fun EditorOverflowMenu(
                     onShare = { open = false; onShare() },
                     onExport = { open = false; onExport() },
                     onRemind = { open = false; onRemind() },
+                    onSummarize = onSummarize?.let { cb -> { open = false; cb() } },
                     onDelete = { open = false; onDelete() },
                 )
             }
@@ -1418,6 +1601,7 @@ private fun OverflowMenuCard(
     onShare: () -> Unit,
     onExport: () -> Unit,
     onRemind: () -> Unit,
+    onSummarize: (() -> Unit)? = null,
     onDelete: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
@@ -1444,6 +1628,14 @@ private fun OverflowMenuCard(
                 label = "Remind me",
                 onClick = onRemind,
             )
+            if (onSummarize != null) {
+                OverflowMenuRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    label = "Summarize (AI)",
+                    tint = MaterialTheme.colorScheme.primary,
+                    onClick = onSummarize,
+                )
+            }
             OverflowMenuRow(
                 icon = Icons.Rounded.FileDownload,
                 label = "Export",
@@ -1782,10 +1974,23 @@ private fun EditorMeta(words: Int, readingMinutes: Int) {
     )
 }
 
-private enum class ListStyle(val icon: ImageVector, val label: String) {
-    BULLET(Icons.AutoMirrored.Rounded.FormatListBulleted, "Bullet list"),
-    NUMBERED(Icons.Rounded.FormatListNumbered, "Numbered list"),
-    CHECKLIST(Icons.Rounded.Checklist, "Checklist"),
+private enum class ListStyle(val icon: ImageVector, val label: String, val marker: String?) {
+    BULLET_DOT(Icons.AutoMirrored.Rounded.FormatListBulleted, "Bullet •", "• "),
+    BULLET_RING(Icons.AutoMirrored.Rounded.FormatListBulleted, "Ring ◦", "◦ "),
+    BULLET_SQUARE(Icons.AutoMirrored.Rounded.FormatListBulleted, "Square ▪", "▪ "),
+    BULLET_ARROW(Icons.AutoMirrored.Rounded.FormatListBulleted, "Arrow →", "➤ "),
+    BULLET_STAR(Icons.AutoMirrored.Rounded.FormatListBulleted, "Star ★", "★ "),
+    NUMBERED(Icons.Rounded.FormatListNumbered, "Numbered list", null),
+    CHECKLIST(Icons.Rounded.Checklist, "Checklist", null),
+}
+
+/** Styles for the inline separator inserted by the toolbar divider button (long-press to pick). */
+private enum class SeparatorStyle(val label: String, val text: String) {
+    LINE("Solid line", "────────────────"),
+    DASHED("Dashed", "– – – – – – – – –"),
+    DOTTED("Dotted", "• • • • • • • • •"),
+    STARS("Stars", "✦ ✦ ✦ ✦ ✦"),
+    WAVE("Wave", "〜〜〜〜〜〜〜〜"),
 }
 
 private enum class FormatStyle(val icon: ImageVector, val label: String, val token: String) {
@@ -1820,25 +2025,26 @@ private fun FormattingToolbar(
     onDraw: () -> Unit,
     onHeading: (prefix: String) -> Unit,
     onFormat: (token: String) -> Unit,
-    onBullet: () -> Unit,
+    onBullet: (marker: String) -> Unit,
     onNumbered: () -> Unit,
     onChecklist: () -> Unit,
     onWrap: (open: String, close: String) -> Unit,
-    onDivider: () -> Unit,
+    onDivider: (text: String) -> Unit,
     onTable: () -> Unit,
     onCallout: () -> Unit,
     onSketch: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
-    var listStyle by remember { mutableStateOf(ListStyle.BULLET) }
+    var listStyle by remember { mutableStateOf(ListStyle.BULLET_DOT) }
     var formatStyle by remember { mutableStateOf(FormatStyle.BOLD) }
     var headingStyle by remember { mutableStateOf(HeadingStyle.H1) }
+    var separatorStyle by remember { mutableStateOf(SeparatorStyle.LINE) }
     var wrapIndex by remember { mutableStateOf(0) }
 
     fun applyList(style: ListStyle) = when (style) {
-        ListStyle.BULLET -> onBullet()
         ListStyle.NUMBERED -> onNumbered()
         ListStyle.CHECKLIST -> onChecklist()
+        else -> onBullet(style.marker ?: "• ")
     }
 
     Row(
@@ -1927,7 +2133,22 @@ private fun FormattingToolbar(
                 )
             }
         }
-        ToolbarButton(Icons.Rounded.HorizontalRule, "Divider", onDivider)
+        ToolbarMenuButton(
+            description = "Divider · ${separatorStyle.label}",
+            onClick = { onDivider(separatorStyle.text) },
+            icon = Icons.Rounded.HorizontalRule,
+        ) { dismiss ->
+            SeparatorStyle.entries.forEach { style ->
+                DropdownMenuItem(
+                    text = { Text("${style.label}   ${style.text.take(7)}") },
+                    onClick = {
+                        separatorStyle = style
+                        dismiss()
+                        onDivider(style.text)
+                    },
+                )
+            }
+        }
         ToolbarButton(Icons.Rounded.TableChart, "Table", onTable)
         ToolbarButton(Icons.Rounded.Gesture, "Sketch box", onSketch)
         ToolbarButton(Icons.Rounded.Lightbulb, "Callout", onCallout)
@@ -2546,6 +2767,7 @@ private fun ResizableAttachmentImage(
     onWidthChange: (Int) -> Unit,
     onRemove: () -> Unit,
     onCrop: () -> Unit,
+    onExtractText: () -> Unit,
 ) {
     val context = LocalContext.current
     val readOnly = LocalReadOnly.current
@@ -2580,6 +2802,7 @@ private fun ResizableAttachmentImage(
                         .padding(10.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
+                    ImageOverlayButton(icon = Icons.Rounded.DocumentScanner, description = "Extract text (on-device)", onClick = onExtractText)
                     ImageOverlayButton(icon = Icons.Rounded.Crop, description = "Crop image", onClick = onCrop)
                     ImageOverlayButton(icon = Icons.Rounded.Close, description = "Remove image", onClick = onRemove)
                 }
@@ -2634,6 +2857,49 @@ private fun ImageOverlayButton(icon: ImageVector, description: String, onClick: 
             tint = Color.White,
             modifier = Modifier.size(18.dp),
         )
+    }
+}
+
+/** A horizontally-scrolling row of on-device "smart" action chips (dates, links, phone, etc.). */
+@Composable
+private fun SmartActionsRow(actions: List<SmartSuggestion>, onAction: (SmartSuggestion) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        actions.forEach { suggestion ->
+            val icon = when (suggestion.type) {
+                SmartActionType.REMINDER -> Icons.Rounded.NotificationsActive
+                SmartActionType.CALL -> Icons.Rounded.Call
+                SmartActionType.EMAIL -> Icons.Rounded.Email
+                SmartActionType.URL -> Icons.Rounded.Link
+                SmartActionType.ADDRESS -> Icons.Rounded.Place
+            }
+            val label = if (suggestion.type == SmartActionType.REMINDER) "Remind · ${suggestion.label}" else suggestion.label
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f), RoundedCornerShape(20.dp))
+                    .clickable { onAction(suggestion) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 220.dp),
+                )
+            }
+        }
     }
 }
 

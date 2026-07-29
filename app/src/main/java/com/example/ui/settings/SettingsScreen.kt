@@ -98,6 +98,7 @@ import com.example.data.sync.DriveAuth
 import com.example.data.settings.PageInkTextMode
 import com.example.ui.components.NeuIconButton
 import com.example.ui.components.NeuSurface
+import com.example.ui.components.mynotesSwitchColors
 import com.example.ui.theme.ThemeMode
 import com.example.ui.theme.brandGradientHorizontal
 import com.example.ui.util.responsiveHorizontalPadding
@@ -436,6 +437,17 @@ fun SettingsScreen(
                     selected = settings.pageInkTextMode,
                     onSelect = { viewModel.setPageInkTextMode(it) },
                 )
+                SettingsDivider()
+                ToggleRow(
+                    icon = Icons.Rounded.AutoAwesome,
+                    title = "Smart suggestions",
+                    subtitle = if (settings.smartSuggestionsEnabled)
+                        "Spot dates, links, phone numbers & addresses in a note - on‑device"
+                    else
+                        "Off - no on‑device text analysis",
+                    checked = settings.smartSuggestionsEnabled,
+                    onCheckedChange = { viewModel.setSmartSuggestionsEnabled(it) },
+                )
             }
 
             Spacer(Modifier.height(20.dp))
@@ -678,10 +690,7 @@ private fun ToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = MaterialTheme.colorScheme.primary,
-            ),
+            colors = mynotesSwitchColors(),
         )
     }
 }

@@ -87,6 +87,11 @@ class EditorViewModel : ViewModel() {
         settings.settings.map { it.pageInkTextMode }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.example.data.settings.PageInkTextMode.BELOW)
 
+    /** Whether on-device smart suggestions (dates → reminders, links, etc.) are enabled. */
+    val smartSuggestionsEnabled: StateFlow<Boolean> =
+        settings.settings.map { it.smartSuggestionsEnabled }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
     private var persisted = false
     private var autoSaveJob: Job? = null
     private var loaded = false

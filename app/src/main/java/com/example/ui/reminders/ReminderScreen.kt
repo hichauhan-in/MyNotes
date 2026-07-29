@@ -62,11 +62,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.domain.model.Reminder
 import com.example.domain.model.ReminderRepeat
 import com.example.data.reminders.ReminderScheduler
+import com.example.ui.components.BrandGradientButton
+import com.example.ui.components.mynotesSwitchColors
 import com.example.ui.util.responsiveHorizontalPadding
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -139,12 +142,16 @@ fun ReminderScreen(
                         modifier = Modifier
                             .size(72.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                            .clickable {
+                                editorFor = null
+                                showEditor = true
+                            },
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             Icons.Rounded.NotificationsActive,
-                            contentDescription = null,
+                            contentDescription = "Create a reminder",
                             tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(34.dp),
                         )
@@ -158,9 +165,19 @@ fun ReminderScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Tap + to set one up.",
+                        "Tap the bell above, the button below, or ＋ to set one up.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    BrandGradientButton(
+                        text = "New reminder",
+                        icon = Icons.Rounded.Add,
+                        onClick = {
+                            editorFor = null
+                            showEditor = true
+                        },
                     )
                 }
             }
@@ -281,10 +298,7 @@ private fun ReminderRow(
         Switch(
             checked = reminder.enabled,
             onCheckedChange = onToggle,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color.White,
-                checkedTrackColor = MaterialTheme.colorScheme.primary,
-            ),
+            colors = mynotesSwitchColors(),
         )
     }
 }

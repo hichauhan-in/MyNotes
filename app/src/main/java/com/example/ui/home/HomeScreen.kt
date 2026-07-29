@@ -1863,19 +1863,19 @@ private fun ExpandableFab(
         ) {
             Column(horizontalAlignment = Alignment.End) {
                 FabAction("Import note", Icons.Rounded.Download, bordered = true, iconSlotSize = 62.dp) { onImport() }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(3.dp))
                 FabAction("New book", Icons.Rounded.CreateNewFolder, bordered = true, iconSlotSize = 62.dp) { onCreateBook() }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(3.dp))
                 FabAction("Reminder", Icons.Rounded.NotificationsActive, bordered = true, iconSlotSize = 62.dp) { onReminder() }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(3.dp))
                 FabAction("Expenses", Icons.Rounded.AccountBalanceWallet, bordered = true, iconSlotSize = 62.dp) { onAction("expense") }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(3.dp))
                 FabAction("Board", Icons.Rounded.Draw, bordered = true, iconSlotSize = 62.dp) { onAction("scribble") }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(3.dp))
                 FabAction("Checklist", Icons.Rounded.Checklist, bordered = true, iconSlotSize = 62.dp) { onAction("checklist") }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(3.dp))
                 FabAction("New note", Icons.Rounded.EditNote, bordered = true, iconSlotSize = 62.dp) { onAction(null) }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
             }
         }
 
@@ -1936,12 +1936,13 @@ private fun FabAction(
         )
     }
     val iconTile: @Composable () -> Unit = {
-        // The 48dp tile is centered inside a slot the width of the parent FAB button, so a spawned
-        // action's icon lines up dead-centre under the main button instead of sitting to one side.
+        // The 48dp tile is centered inside a slot the WIDTH of the parent FAB button (height wraps to
+        // the tile) so a spawned action's icon lines up dead-centre under the main button, while the
+        // rows stay vertically compact.
         Box(
             modifier = Modifier
                 .zIndex(1f)
-                .size(iconSlotSize),
+                .width(iconSlotSize),
             contentAlignment = Alignment.Center,
         ) {
             Box(

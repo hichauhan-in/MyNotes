@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material.icons.rounded.Undo
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -219,6 +220,7 @@ internal fun PageInkToolbar(
     onPenWidth: (Float) -> Unit,
     onUndo: () -> Unit,
     onClear: () -> Unit,
+    onRecognize: () -> Unit,
     onDone: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
@@ -276,6 +278,7 @@ internal fun PageInkToolbar(
             }
         }
         InkDivider()
+        InkIcon(Icons.Rounded.TextFields, "Convert handwriting to text", onRecognize)
         InkIcon(Icons.Rounded.Undo, "Undo", onUndo)
         InkIcon(Icons.Rounded.DeleteSweep, "Clear ink", onClear)
         Spacer(Modifier.width(2.dp))

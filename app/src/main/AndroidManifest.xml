@@ -14,6 +14,11 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- The on-device GenAI (Gemini Nano) library targets API 26; the app supports 24. The AI
+         features are runtime-gated (Build.VERSION + feature-status checks) so they simply don't
+         appear on API 24/25 or on devices without AICore. -->
+    <uses-sdk tools:overrideLibrary="com.google.mlkit.genai.summarization" />
+
     <application
         android:name=".VaultNotesApp"
         android:allowBackup="true"

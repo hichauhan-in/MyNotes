@@ -108,6 +108,8 @@ private data class ExpAccount(
     val balance: Double,
     val tags: List<String>,
     val sections: List<ExpSection>,
+    /** A monthly credit (e.g. salary) the user tops up; adds on top of [balance] in the total. */
+    val credit: Double = 0.0,
 )
 
 /** A saved, repeatable money move between two accounts. Tapping "Transfer" applies it. */
@@ -184,6 +186,7 @@ private fun parseAccounts(arr: JSONArray): ExpenseModel {
             o.optDouble("balance", 0.0),
             tags,
             sections,
+            o.optDouble("credit", 0.0),
         )
     }
     return ExpenseModel(accounts)
@@ -263,7 +266,7 @@ private fun serializeExpense(model: ExpenseModel): String {
         accArr.put(
             JSONObject()
                 .put("id", a.id).put("name", a.name).put("icon", a.iconKey).put("color", a.colorArgb)
-                .put("balance", a.balance).put("tags", tagsArr).put("sections", secArr),
+                .put("balance", a.balance).put("credit", a.credit).put("tags", tagsArr).put("sections", secArr),
         )
     }
     val transfersArr = JSONArray()
@@ -457,6 +460,7 @@ internal fun ExpenseEditor(
                     readOnly = readOnly,
                     canTransfer = accounts.size > 1,
                     onBalance = { updateAccount(account.id) { a -> a.copy(balance = it) } },
+                    onCredit = { updateAccount(account.id) { a -> a.copy(credit = it) } },
                     onSend = { showSend = true },
                     onTransfer = { showTransfer = true },
                     onEdit = { editAccountId = account.id },
@@ -709,6 +713,7 @@ private fun AccountHeaderCard(
     readOnly: Boolean,
     canTransfer: Boolean,
     onBalance: (Double) -> Unit,
+    onCredit: (Double) -> Unit,
     onSend: () -> Unit,
     onTransfer: () -> Unit,
     onEdit: () -> Unit,
@@ -716,7 +721,8 @@ private fun AccountHeaderCard(
     onRenameText: (String) -> Unit,
 ) {
     val deductible = account.deductible()
-    val available = account.balance - deductible
+    val total = account.balance + account.credit
+    val available = total - deductible
     ExpenseCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(
@@ -757,6 +763,46 @@ private fun AccountHeaderCard(
             onChange = onBalance,
             textStyle = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
         )
+        // Monthly credit (e.g. salary): the user just updates this each month and it adds to the total.
+        if (!readOnly || account.credit > 0.0) {
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Rounded.Add,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(16.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "Credited this month (salary)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(2.dp))
+            MoneyField(
+                value = account.credit,
+                onChange = onCredit,
+                textStyle = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+            )
+        }
+        if (account.credit > 0.0) {
+            Spacer(Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Total",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = formatMoney(total),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = accent,
+                )
+            }
+        }
         if (deductible > 0.0) {
             Spacer(Modifier.height(6.dp))
             Text(

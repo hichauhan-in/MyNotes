@@ -474,7 +474,7 @@ object Exporter {
         for (i in 0 until accs.length()) {
             val a = accs.getJSONObject(i)
             if (i > 0) out.add("")
-            out.add("${a.optString("name").ifBlank { "Account" }} — Balance ₹${money(a.optDouble("balance", 0.0))}")
+            out.add("${a.optString("name").ifBlank { "Account" }} — Total ₹${money(a.optDouble("balance", 0.0) + a.optDouble("credit", 0.0))}")
             val tags = a.optJSONArray("tags")
             if (tags != null && tags.length() > 0) {
                 out.add("  Tags: " + (0 until tags.length()).joinToString(", ") { tags.optString(it) })
@@ -519,7 +519,7 @@ object Exporter {
         for (i in 0 until accs.length()) {
             val a = accs.getJSONObject(i)
             if (i > 0) appendLine()
-            appendLine("## ${a.optString("name").ifBlank { "Account" }} — ₹${money(a.optDouble("balance", 0.0))}")
+            appendLine("## ${a.optString("name").ifBlank { "Account" }} — ₹${money(a.optDouble("balance", 0.0) + a.optDouble("credit", 0.0))}")
             val tags = a.optJSONArray("tags")
             if (tags != null && tags.length() > 0) {
                 appendLine("_" + (0 until tags.length()).joinToString(", ") { tags.optString(it) } + "_")
@@ -562,7 +562,7 @@ object Exporter {
         if (accs.length() == 0) { append("<p><em>(no accounts)</em></p>"); return@buildString }
         for (i in 0 until accs.length()) {
             val a = accs.getJSONObject(i)
-            append("<h2>${esc(a.optString("name").ifBlank { "Account" })} — ₹${money(a.optDouble("balance", 0.0))}</h2>")
+            append("<h2>${esc(a.optString("name").ifBlank { "Account" })} — ₹${money(a.optDouble("balance", 0.0) + a.optDouble("credit", 0.0))}</h2>")
             val tags = a.optJSONArray("tags")
             if (tags != null && tags.length() > 0) {
                 append("<p><em>" + (0 until tags.length()).joinToString(", ") { esc(tags.optString(it)) } + "</em></p>")

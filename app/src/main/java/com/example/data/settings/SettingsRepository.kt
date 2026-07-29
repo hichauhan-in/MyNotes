@@ -57,6 +57,8 @@ data class AppSettings(
     val swipeNavigationEnabled: Boolean = false,
     /** How typed text shares space with full-page pen drawings in a note. */
     val pageInkTextMode: PageInkTextMode = PageInkTextMode.BELOW,
+    /** When true, notes detect dates/links/etc on-device and offer one-tap smart actions. */
+    val smartSuggestionsEnabled: Boolean = true,
 )
 
 /**
@@ -92,6 +94,7 @@ class SettingsRepository(context: Context) {
         val OPEN_IN_EDIT = booleanPreferencesKey("open_notes_in_edit_mode")
         val SWIPE_NAV = booleanPreferencesKey("swipe_navigation_enabled")
         val PAGE_INK_MODE = stringPreferencesKey("page_ink_text_mode")
+        val SMART_SUGGESTIONS = booleanPreferencesKey("smart_suggestions_enabled")
     }
 
     val customTemplates: Flow<List<CustomTemplate>> = dataStore.data.map { prefs ->
@@ -128,6 +131,7 @@ class SettingsRepository(context: Context) {
             pageInkTextMode = runCatching {
                 PageInkTextMode.valueOf(prefs[Keys.PAGE_INK_MODE] ?: PageInkTextMode.BELOW.name)
             }.getOrDefault(PageInkTextMode.BELOW),
+            smartSuggestionsEnabled = prefs[Keys.SMART_SUGGESTIONS] ?: true,
         )
     }
 
@@ -207,6 +211,9 @@ class SettingsRepository(context: Context) {
 
     suspend fun setPageInkTextMode(mode: PageInkTextMode) =
         edit { it[Keys.PAGE_INK_MODE] = mode.name }
+
+    suspend fun setSmartSuggestionsEnabled(value: Boolean) =
+        edit { it[Keys.SMART_SUGGESTIONS] = value }
 
     suspend fun addTemplate(template: CustomTemplate) = dataStore.edit { prefs ->
         val current = parseTemplates(prefs[Keys.TEMPLATES] ?: "[]")

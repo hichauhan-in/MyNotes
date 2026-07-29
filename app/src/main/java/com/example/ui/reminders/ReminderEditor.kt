@@ -64,6 +64,7 @@ internal fun ReminderEditorSheet(
     prefillTitle: String = "",
     prefillBody: String = "",
     prefillNoteId: String? = null,
+    prefillTriggerAt: Long? = null,
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -76,7 +77,7 @@ internal fun ReminderEditorSheet(
     }
     var title by remember { mutableStateOf(initial?.title ?: prefillTitle) }
     var body by remember { mutableStateOf(initial?.body ?: prefillBody) }
-    var triggerAt by remember { mutableStateOf(initial?.triggerAt ?: defaultTime) }
+    var triggerAt by remember { mutableStateOf(initial?.triggerAt ?: prefillTriggerAt ?: defaultTime) }
     var repeat by remember { mutableStateOf(initial?.repeat ?: ReminderRepeat.NONE) }
     val noteId = initial?.noteId ?: prefillNoteId
 

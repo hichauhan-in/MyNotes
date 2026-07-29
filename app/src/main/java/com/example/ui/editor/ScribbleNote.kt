@@ -46,6 +46,7 @@ import androidx.compose.material.icons.rounded.Circle
 import androidx.compose.material.icons.rounded.HorizontalRule
 import androidx.compose.material.icons.rounded.Rectangle
 import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.material.icons.rounded.Spellcheck
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Crop
@@ -97,6 +98,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.example.data.attachments.AttachmentStore
 import com.example.data.attachments.EncAttachment
+import com.example.data.ml.HandwritingRecognizer
 import com.example.domain.model.AttachmentMarkup
 import com.example.ui.theme.LocalNeuColors
 import com.example.ui.theme.neumorphicRaised
@@ -119,7 +121,7 @@ private enum class WbMode { DRAW, SHAPE, MOVE, TEXT }
 
 private enum class WbShapeType { LINE, ARROW, RECT, ELLIPSE }
 
-private data class WbText(val id: String, val x: Float, val y: Float, val text: String)
+private data class WbText(val id: String, val x: Float, val y: Float, val text: String, val colorArgb: Int = 0)
 
 /** A single freehand stroke. [color] 0 means "follow the theme" (onSurface); else a fixed ARGB. */
 private data class WbStroke(val points: List<Offset>, val color: Int, val width: Float)
@@ -179,6 +181,17 @@ private val penColors = listOf(
 
 private fun emptyWb() = WbModel(emptyList(), emptyList(), emptyList(), emptyList(), 0f, 0f, 1f)
 
+// Sticky-note colours for board text notes. 0 == the default surface (theme) colour.
+private val wbNoteColors = listOf(
+    0,
+    0xFFFFF3B0.toInt(),
+    0xFFFFD6A5.toInt(),
+    0xFFCDEAC0.toInt(),
+    0xFFBFD7FF.toInt(),
+    0xFFE7C6FF.toInt(),
+    0xFFFFC9C9.toInt(),
+)
+
 /**
  * Width / height of an attachment image (respecting EXIF rotation), or null if it can't be read.
  * Used to size a board image to its natural aspect ratio so it never looks stretched or letterboxed.
@@ -234,6 +247,7 @@ private fun parseWb(content: String): WbModel = runCatching {
             t.optDouble("x", 0.0).toFloat(),
             t.optDouble("y", 0.0).toFloat(),
             t.optString("t"),
+            t.optInt("c", 0),
         )
     }
     val shArr = o.optJSONArray("sh") ?: JSONArray()
@@ -315,7 +329,7 @@ private fun serializeWb(m: WbModel): String {
     }
     val tArr = JSONArray()
     m.texts.forEach { t ->
-        tArr.put(JSONObject().put("id", t.id).put("x", t.x.toDouble()).put("y", t.y.toDouble()).put("t", t.text))
+        tArr.put(JSONObject().put("id", t.id).put("x", t.x.toDouble()).put("y", t.y.toDouble()).put("t", t.text).put("c", t.colorArgb))
     }
     o.put("t", tArr)
     return o.toString()
@@ -443,6 +457,26 @@ internal fun ScribbleEditor(
     }
     fun addImage() {
         imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
+    // On-device handwriting → text: recognise the board's freehand strokes with ML Kit and drop the
+    // result as a text note at the centre of the current view. Nothing is uploaded.
+    fun recognizeBoardToText() {
+        if (model.strokes.isEmpty()) return
+        android.widget.Toast.makeText(context, "Reading handwriting…", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch {
+            val text = HandwritingRecognizer.recognize(model.strokes.map { it.points })
+            if (text.isBlank()) {
+                android.widget.Toast.makeText(context, "Couldn't read the handwriting", android.widget.Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            val cw = canvasSize.width.toFloat()
+            val ch = canvasSize.height.toFloat()
+            val cx = if (cw > 0f) (cw / 2f - model.panX) / model.scale else 0f
+            val cy = if (ch > 0f) (ch / 2f - model.panY) / model.scale else 0f
+            update(model.copy(texts = model.texts + WbText(UUID.randomUUID().toString(), cx - 60f, cy, text)))
+            android.widget.Toast.makeText(context, "Added as a text note", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -649,6 +683,15 @@ internal fun ScribbleEditor(
                                         ),
                                     )
                                 },
+                                onColor = {
+                                    val cur = wbNoteColors.indexOf(textNote.colorArgb).coerceAtLeast(0)
+                                    val next = wbNoteColors[(cur + 1) % wbNoteColors.size]
+                                    update(
+                                        model.copy(
+                                            texts = model.texts.map { if (it.id == textNote.id) it.copy(colorArgb = next) else it },
+                                        ),
+                                    )
+                                },
                                 onDelete = { update(model.copy(texts = model.texts.filterNot { it.id == textNote.id })) },
                             )
                         }
@@ -678,6 +721,7 @@ internal fun ScribbleEditor(
                     onPenColor = { penColor = it; mode = WbMode.DRAW },
                     onPickShape = { shapeType = it; mode = WbMode.SHAPE },
                     onAddImage = { addImage() },
+                    onRecognize = { recognizeBoardToText() },
                     onZoomIn = { zoomBy(1.25f) },
                     onZoomOut = { zoomBy(0.8f) },
                     onUndo = {
@@ -834,17 +878,22 @@ private fun WbTextNote(
     note: WbText,
     onMove: (Float, Float) -> Unit,
     onText: (String) -> Unit,
+    onColor: () -> Unit,
     onDelete: () -> Unit,
 ) {
     val neu = LocalNeuColors.current
     val readOnly = LocalReadOnly.current
+    val colored = note.colorArgb != 0
+    val bg = if (colored) Color(note.colorArgb) else MaterialTheme.colorScheme.surface
+    // Pastel sticky notes are always light, so use a dark ink on them regardless of theme.
+    val fg = if (colored) Color(0xFF1E1E24) else MaterialTheme.colorScheme.onSurface
     Row(
         modifier = Modifier
             .offset { IntOffset(note.x.roundToInt(), note.y.roundToInt()) }
             .widthIn(max = 220.dp)
             .neumorphicRaised(12.dp, neu, elevation = 4.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
+            .background(bg)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -865,14 +914,26 @@ private fun WbTextNote(
             Icon(
                 Icons.Rounded.DragIndicator,
                 contentDescription = "Move note",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = fg.copy(alpha = 0.6f),
                 modifier = Modifier.size(18.dp),
             )
+        }
+        if (!readOnly) {
+            // A tap cycles the sticky-note colour.
+            Box(
+                modifier = Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(if (colored) Color(note.colorArgb) else MaterialTheme.colorScheme.surfaceVariant)
+                    .border(1.5.dp, fg.copy(alpha = 0.35f), CircleShape)
+                    .clickable(onClick = onColor),
+            )
+            Spacer(Modifier.width(4.dp))
         }
         BasicTextField(
             value = note.text,
             onValueChange = onText,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = fg),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             readOnly = readOnly,
             decorationBox = { inner ->
@@ -880,7 +941,7 @@ private fun WbTextNote(
                     Text(
                         text = "Note",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        color = fg.copy(alpha = 0.4f),
                     )
                 }
                 inner()
@@ -899,7 +960,7 @@ private fun WbTextNote(
             Icon(
                 Icons.Rounded.Close,
                 contentDescription = "Delete note",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = fg.copy(alpha = 0.6f),
                 modifier = Modifier.size(15.dp),
             )
         }
@@ -917,6 +978,7 @@ private fun WbToolbar(
     onPenColor: (Int) -> Unit,
     onPickShape: (WbShapeType) -> Unit,
     onAddImage: () -> Unit,
+    onRecognize: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onUndo: () -> Unit,
@@ -953,6 +1015,7 @@ private fun WbToolbar(
         WbToolButton(Icons.Rounded.PanTool, "Move", selected = mode == WbMode.MOVE) { onMode(WbMode.MOVE) }
         WbToolButton(Icons.Rounded.TextFields, "Add text", selected = mode == WbMode.TEXT) { onMode(WbMode.TEXT) }
         WbToolButton(Icons.Rounded.AddPhotoAlternate, "Add image", selected = false, onClick = onAddImage)
+        WbToolButton(Icons.Rounded.Spellcheck, "Handwriting to text", selected = false, onClick = onRecognize)
         WbDivider()
         WbToolButton(Icons.Rounded.Remove, "Zoom out", selected = false, onClick = onZoomOut)
         WbToolButton(Icons.Rounded.Add, "Zoom in", selected = false, onClick = onZoomIn)

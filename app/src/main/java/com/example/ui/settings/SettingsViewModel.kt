@@ -88,6 +88,10 @@ class SettingsViewModel : ViewModel() {
         viewModelScope.launch { repository.setPageInkTextMode(mode) }
     }
 
+    fun setSmartSuggestionsEnabled(value: Boolean) {
+        viewModelScope.launch { repository.setSmartSuggestionsEnabled(value) }
+    }
+
     // ---- Google Drive sync ----
 
     /** Called while the account picker / consent screen is showing. */

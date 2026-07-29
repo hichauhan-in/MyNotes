@@ -115,6 +115,17 @@ dependencies {
   implementation(libs.okhttp)
   implementation(libs.play.services.auth)
   // implementation(libs.play.services.location)
+  // On-device OCR (bundled Latin model) - all recognition runs locally, nothing is uploaded.
+  implementation(libs.mlkit.text.recognition)
+  // On-device smart text (dates -> reminders, links, phone/email/address). Base detector bundled;
+  // a small language model downloads once. Note text is processed locally and never uploaded.
+  implementation(libs.mlkit.entity.extraction)
+  // On-device handwriting -> text (page-ink & board). Language model (~20MB) downloads once; strokes
+  // are recognised locally and never uploaded.
+  implementation(libs.mlkit.digital.ink)
+  // On-device generative AI (Gemini Nano via AICore): note summarisation, fully local & free.
+  // Only works on devices that ship AICore + Gemini Nano; feature is availability-gated at runtime.
+  implementation(libs.mlkit.genai.summarization)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
